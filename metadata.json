@@ -1,0 +1,8 @@
+{
+  "name": "Smart PDF & AI Merger",
+  "description": "A professional tool to merge PDF and AI files with drag-and-drop support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
