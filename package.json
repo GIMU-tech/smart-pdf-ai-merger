@@ -6,6 +6,8 @@
   "main": "main.cjs",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
+    "server": "node server.cjs",
+    "dev:all": "start cmd /k node server.cjs && vite --port=3000 --host=0.0.0.0",
     "build": "node node_modules/vite/bin/vite.js build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
