@@ -36,73 +36,23 @@ if (!fs.existsSync(tempDir)) {
 }
 const localUpload = multer({ dest: tempDir });
 
-// Route 0: Welcome / Root landing page confirming operational status
+// Serve static assets from Vite's build directory (dist)
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Route 0: Serve React Web App at Root
 app.get('/', (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="ko">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>PDF & AI Toolkit API Service</title>
-      <style>
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-          background-color: #f9fafb;
-          color: #111827;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          height: 100vh;
-          margin: 0;
-        }
-        .card {
-          background: white;
-          padding: 2.5rem;
-          border-radius: 1rem;
-          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-          text-align: center;
-          max-width: 450px;
-          border: 1px solid #f3f4f6;
-        }
-        .icon {
-          font-size: 3rem;
-          margin-bottom: 1rem;
-        }
-        h1 {
-          font-size: 1.5rem;
-          font-weight: 700;
-          margin-bottom: 0.5rem;
-        }
-        p {
-          color: #6b7280;
-          font-size: 0.875rem;
-          line-height: 1.5;
-          margin-bottom: 1.5rem;
-        }
-        .badge {
-          display: inline-block;
-          background-color: #ecfdf5;
-          color: #059669;
-          font-size: 0.75rem;
-          font-weight: 600;
-          padding: 0.25rem 0.75rem;
-          border-radius: 9999px;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <div class="icon">🚀</div>
-        <h1>PDF & AI Toolkit API</h1>
-        <p>사내 배포용 고정밀 PDF 변환 및 비교 분석 백엔드 API 서비스가 24시간 정상 가동 중입니다.</p>
-        <span class="badge">Active & Healthy</span>
+  const indexPath = path.join(__dirname, 'dist', 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.send(`
+      <div style="font-family: sans-serif; text-align: center; margin-top: 100px;">
+        <h2>PDF & AI Toolkit API Service Running</h2>
+        <p>Frontend static files (dist/) not built yet. Please build with <b>npm run build</b>.</p>
+        <span style="background: #e6fffa; color: #00875a; padding: 4px 12px; border-radius: 99px;">Active</span>
       </div>
-    </body>
-    </html>
-  `);
+    `);
+  }
 });
 
 // Route 1: Health check

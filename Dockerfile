@@ -1,26 +1,47 @@
-# 1. Base Node.js image
+# ==========================================
+# STAGE 1: Build static React frontend assets
+# ==========================================
+FROM node:20-slim AS builder
+WORKDIR /app
+
+# Install dependencies (including devDependencies like Vite and TypeScript)
+COPY package*.json ./
+RUN npm install
+
+# Copy source code and build the production bundle
+COPY . .
+RUN npm run build
+
+# ==========================================
+# STAGE 2: Secure, production runtime container
+# ==========================================
 FROM node:20-slim
 
-# 2. Install Ghostscript, MuPDF (mupdf-tools), and clean apt cache to minimize image size
+# Install system dependencies (Ghostscript & MuPDF tools)
 RUN apt-get update && apt-get install -y \
     ghostscript \
     mupdf-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Set work directory and configure environment variables
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 
-# 4. Copy configuration files and install npm production packages
+# Install only production runtime npm packages
 COPY package*.json ./
 RUN npm install --production
 
-# 5. Copy the source codebase
-COPY . .
+# Copy built React frontend bundle from the builder stage
+COPY --from=builder /app/dist ./dist
 
-# 6. Expose default API server port
+# Copy backend server files
+COPY server.cjs ./
+COPY workers/ ./workers/
+COPY bin/ ./bin/
+COPY *.traineddata ./
+
+# Expose default API port
 EXPOSE 8080
 
-# 7. Start the unified 24/7 web backend API server
+# Start the unified web application (React UI + Express API Backend)
 CMD ["node", "server.cjs"]
