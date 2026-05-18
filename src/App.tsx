@@ -147,34 +147,77 @@ export default function App() {
   const runOutlining = async () => {
     if (!outlineFile) return;
     const api = (window as any).electronAPI;
-    if (!api) {
-      setOutlineError('이 기능은 데스크톱 앱 환경에서만 사용할 수 있습니다.');
-      return;
-    }
     setIsOutlining(true);
     setOutlineError(null);
     setOutlineSuccess(null);
     try {
-      const saveDir = await api.selectDirectory();
-      if (!saveDir) { setIsOutlining(false); return; }
+      if (api) {
+        // Desktop Electron environment
+        const saveDir = await api.selectDirectory();
+        if (!saveDir) { setIsOutlining(false); return; }
 
-      let filePath = '';
-      if (api.getPathForFile) filePath = api.getPathForFile(outlineFile);
-      else filePath = (outlineFile as any).path;
-      if (!filePath) throw new Error('파일 경로를 읽을 수 없습니다.');
+        let filePath = '';
+        if (api.getPathForFile) filePath = api.getPathForFile(outlineFile);
+        else filePath = (outlineFile as any).path;
+        if (!filePath) throw new Error('파일 경로를 읽을 수 없습니다.');
 
-      const result = await api.processOutline({
-        filePath,
-        saveDirectory: saveDir,
-        baseName: outlineName.trim() || '출력문서',
-      });
+        const result = await api.processOutline({
+          filePath,
+          saveDirectory: saveDir,
+          baseName: outlineName.trim() || '출력문서',
+        });
 
-      if (result.success) {
-        setOutlineSuccess(saveDir);
-        setOutlineFile(null);
-        setOutlineName('');
+        if (result.success) {
+          setOutlineSuccess(`로컬 저장 완료: ${saveDir}`);
+          setOutlineFile(null);
+          setOutlineName('');
+        } else {
+          setOutlineError(result.error || '변환 중 오류가 발생했습니다.');
+        }
       } else {
-        setOutlineError(result.error || '변환 중 오류가 발생했습니다.');
+        // Web Browser environment
+        const API_URL = window.location.hostname === 'localhost'
+          ? 'http://localhost:8080'
+          : 'https://smart-pdf-ai-merger.onrender.com';
+
+        const formData = new FormData();
+        formData.append('file', outlineFile);
+
+        const response = await fetch(`${API_URL}/process-outline`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({ error: '서버 연결에 실패했습니다.' }));
+          throw new Error(errData.error || '아웃라인 서버 처리 오류');
+        }
+
+        const result = await response.json();
+        if (result.success) {
+          // Trigger browser file download from base64 string
+          const byteCharacters = atob(result.fileData);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          const blob = new Blob([byteArray], { type: 'application/pdf' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = result.fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          setOutlineSuccess(`웹 아웃라인 문서가 다운로드 폴더로 저장되었습니다! 파일명: ${result.fileName}`);
+          setOutlineFile(null);
+          setOutlineName('');
+        } else {
+          setOutlineError(result.error || '변환 중 오류가 발생했습니다.');
+        }
       }
     } catch (err: any) {
       setOutlineError(err.message || '처리 중 오류가 발생했습니다.');

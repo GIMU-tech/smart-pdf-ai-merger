@@ -317,85 +317,47 @@ export function CompareTab({
   }, [checkedItems, filteredDiffs, currentResult]);
 
   const runCompare = async () => {
-    const api = (window as any).electronAPI;
-    if (!api) {
-      // Browser environment mockup fallback for debugging and responsive review
-      setCmp(true);
-      setError(null);
-      setRes(null);
-      setCurrentPageIdx(0);
-      setCheckedItems({});
-      await new Promise(r => setTimeout(r, 1200)); // realistic loading effect
-      
-      const base64Pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-      setRes([
-        {
-          page: 1,
-          base64A: base64Pixel,
-          base64B: base64Pixel,
-          diffs: [
-            {
-              type: "number_changed",
-              severity: "critical",
-              desc: "금액/수량 정보 불일치: 12,000원 -> 15,000원",
-              bbox: { x: 50, y: 80, width: 120, height: 25 },
-              textInfo: {
-                beforeStr: "12,000원",
-                afterStr: "15,000원",
-                diffs: [
-                  [0, "단가: "],
-                  [-1, "12,000"],
-                  [1, "15,000"],
-                  [0, "원"]
-                ]
-              }
-            },
-            {
-              type: "text_modified",
-              severity: "high",
-              desc: "계약서 조항 문구 수정",
-              bbox: { x: 50, y: 150, width: 450, height: 40 },
-              textInfo: {
-                beforeStr: "본 계약은 체결일로부터 1년간 효력을 가진다.",
-                afterStr: "본 계약은 체결일로부터 3년간 효력을 가진다.",
-                diffs: [
-                  [0, "본 계약은 체결일로부터 "],
-                  [-1, "1년간"],
-                  [1, "3년간"],
-                  [0, " 효력을 가진다."]
-                ]
-              }
-            }
-          ]
-        },
-        {
-          page: 2,
-          base64A: base64Pixel,
-          base64B: base64Pixel,
-          diffs: [
-            {
-              type: "layout_changed",
-              severity: "medium",
-              desc: "도형 배치 및 레이아웃 오차 감지",
-              bbox: { x: 80, y: 120, width: 300, height: 60 }
-            }
-          ]
-        }
-      ]);
-      setCmp(false);
-      return;
-    }
-
     if (!fileA || !fileB) { setError('원본과 수정본 PDF를 모두 선택해주세요.'); return; }
+    const api = (window as any).electronAPI;
     setCmp(true); setError(null); setRes(null); setCurrentPageIdx(0); setCheckedItems({});
     try {
-      const pathA = api.getPathForFile ? api.getPathForFile(fileA) : (fileA as any).path;
-      const pathB = api.getPathForFile ? api.getPathForFile(fileB) : (fileB as any).path;
-      const resp = await api.comparePdfs({ fileA: pathA, fileB: pathB, sensitivity: mode });
-      if (resp.success) {
-        setRes(resp.results);
+      if (api) {
+        // Desktop Electron environment
+        const pathA = api.getPathForFile ? api.getPathForFile(fileA) : (fileA as any).path;
+        const pathB = api.getPathForFile ? api.getPathForFile(fileB) : (fileB as any).path;
+        const resp = await api.comparePdfs({ fileA: pathA, fileB: pathB, sensitivity: mode });
+        if (resp.success) {
+          setRes(resp.results);
+        } else {
+          setError(resp.error || '비교 중 오류가 발생했습니다.');
+        }
       } else {
-        setError(resp.error || '비교 중 오류가 발생했습니다.');
+        // Web Browser environment - Cloud API upload
+        const API_URL = window.location.hostname === 'localhost'
+          ? 'http://localhost:8080'
+          : 'https://smart-pdf-ai-merger.onrender.com';
+
+        const formData = new FormData();
+        formData.append('fileA', fileA);
+        formData.append('fileB', fileB);
+        formData.append('sensitivity', mode);
+
+        const response = await fetch(`${API_URL}/compare-pdfs`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({ error: '서버 비교 처리 중 에러가 발생했습니다.' }));
+          throw new Error(errData.error || '서버 응답 오류');
+        }
+
+        const resp = await response.json();
+        if (resp.success) {
+          setRes(resp.results);
+        } else {
+          setError(resp.error || '비교 중 오류가 발생했습니다.');
+        }
       }
     } catch (e: any) {
       setError(e.message);

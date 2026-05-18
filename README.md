@@ -124,12 +124,58 @@ npm run electron:build
 
 ---
 
+---
+
+## 🌐 사내 배포용 24시간 가동 웹 서비스 가이드 (Hybrid Web Deployment)
+
+본 프로젝트는 데스크톱 일렉트론 앱으로 작동할 뿐만 아니라, 회사 임직원들이 아무런 프로그램 설치 없이 브라우저(URL)만으로 24시간 접속하여 사용할 수 있는 **하이브리드 웹 애플리케이션** 규격이 이미 내장되어 있습니다.
+
+### 1. 로컬 개발 및 API 서버 테스트
+로컬에서 프론트엔드를 실행하고, 백엔드 API 서버를 함께 연동하는 방법입니다:
+*   **API 서버 구동 (Express)**:
+    ```bash
+    node server.cjs
+    ```
+    *(기본 포트 8080번으로 실행되며, 로컬 `bin/gs` 및 `bin/mutool` 엔진을 사용해 백그라운드 연산을 대리 수행합니다.)*
+*   **Vite 개발 클라이언트 구동**:
+    ```bash
+    npm run dev
+    ```
+    *(브라우저로 `http://localhost:3000`에 접속하면, 일렉트론이 없는 순수 브라우저 환경에서도 백엔드 API와 통신하여 모든 기능이 똑같이 작동합니다.)*
+
+---
+
+### 2. 24시간 무정전 클라우드 무료 배포
+사용자가 개인 컴퓨터를 24시간 켜놓지 않고도 안정적으로 사내 서비스를 운영할 수 있습니다.
+
+#### **A. 프론트엔드 배포 (Vercel / Netlify - 완전 무료)**
+1. 본 레포지토리를 개인 깃허브 계정에 연동합니다.
+2. [Vercel](https://vercel.com/) 또는 [Netlify](https://www.netlify.com/)에 깃허브를 연결하고 `smart-pdf-ai-merger` 저장소를 선택합니다.
+3. 빌드 설정:
+   * **Framework Preset**: `Vite`
+   * **Build Command**: `npm run build`
+   * **Output Directory**: `dist`
+4. 배포가 완료되면 사내 전용 24시간 웹 서비스 접속 주소(예: `https://company-pdf-toolkit.vercel.app`)가 즉시 발급됩니다.
+
+#### **B. 백엔드 API 배포 (Render.com / Google Cloud Run - 완전 무료 구간 지원)**
+본 프로젝트에는 클라우드 서버 환경을 1초 만에 빌드해 주는 `Dockerfile`이 완벽하게 내장되어 있습니다.
+1. [Render.com](https://render.com/) 또는 **Google Cloud Run**에 가입하고 본 저장소를 연결합니다.
+2. 서비스 타입으로 **Web Service (Docker)**를 지정합니다.
+3. 빌드 환경을 **Docker**로 선택하기만 하면, 클라우드 서버가 내장된 `Dockerfile`을 감지하여 리눅스 환경 설정 및 `Ghostscript`와 `MuPDF` 설치를 100% 자동으로 빌드 배포합니다.
+4. 배포 성공 시 백엔드 API 주소(예: `https://smart-pdf-ai-merger.onrender.com`)가 완성되며, 프론트엔드와 안전하게 동기화됩니다.
+
+---
+
 ## 💡 AI/개발자를 위한 핵심 유지보수 지침
 
-1. **인코딩 무결성 준수**:
+1. **하이브리드 다중 환경 맵핑 (IPC vs HTTP)**:
+   * [App.tsx](file:///c:/Users/kkh53/Downloads/smart-pdf-&-ai-merger/src/App.tsx) 및 [CompareTab.tsx](file:///c:/Users/kkh53/Downloads/smart-pdf-&-ai-merger/src/features/compare/CompareTab.tsx)는 클라이언트 실행 시 `window.electronAPI` 객체의 존재 유무를 확인합니다.
+   * 일렉트론 래퍼 내에서는 초고속 로컬 파일 IPC(`selectDirectory`, `comparePdfs`)로 무부하 제어하며, 일반 브라우저 환경에서는 백엔드 REST API(/compare-pdfs, /process-outline)로 바이너리를 안전하게 스트리밍하도록 단일 통합 브릿징 설계가 완료되어 있습니다.
+
+2. **인코딩 무결성 준수**:
    * `workers/compare.worker.cjs` 파일 내에는 한국어 리포팅용 문자열("삭제됨", "도형 타입 변경", "아웃라인" 등)이 포함되어 있습니다.
    * 파일 수정 시 PowerShell `Set-Content`나 외부 리디렉션을 사용하면 한글 문자가 UTF-8 바이트로 손상(Mojibake)되므로, 반드시 일반적인 IDE 에디터나 Node.js의 `fs.writeFileSync(..., 'utf8')`로만 편집을 가해야 합니다.
 
-2. **OpenCV 리소스 가비지 컬렉션**:
+3. **OpenCV 리소스 가비지 컬렉션**:
    * OpenCV.js는 웹어셈블리(Wasm) 힙 메모리를 사용하므로 인스턴스 해제가 누락되면 메모리 누수(OOM)가 발생합니다.
    * `compare.worker.cjs` 내의 `detectTextRegions` 함수나 기타 OpenCV 가공 영역이 끝날 때는 반드시 모든 매트릭스 변수에 대해 `.delete()`를 호출하여 자원을 수동 소거해 주어야 합니다.
