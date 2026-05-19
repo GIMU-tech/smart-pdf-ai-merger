@@ -13,6 +13,19 @@ const PORT = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
+// In-memory task queue to bypass Render's 30-second timeout
+const tasks = new Map();
+
+// Periodic cleanup of expired tasks (older than 10 minutes)
+setInterval(() => {
+  const now = Date.now();
+  for (const [taskId, task] of tasks.entries()) {
+    if (now - task.createdAt > 10 * 60 * 1000) {
+      tasks.delete(taskId);
+    }
+  }
+}, 60 * 1000);
+
 // Configure Multer for secure temporary file uploads
 const upload = multer({ dest: os.tmpdir() });
 
@@ -124,7 +137,7 @@ app.post('/process-outline', localUpload.single('file'), (req, res) => {
   });
 });
 
-// Route 3: Compare PDFs
+// Route 3: Initiate PDF Comparison (Asynchronous Task)
 app.post('/compare-pdfs', localUpload.fields([{ name: 'fileA', maxCount: 1 }, { name: 'fileB', maxCount: 1 }]), (req, res) => {
   if (!req.files || !req.files['fileA'] || !req.files['fileB']) {
     return res.status(400).json({ success: false, error: '비교할 파일 2개가 모두 필요합니다.' });
@@ -134,7 +147,18 @@ app.post('/compare-pdfs', localUpload.fields([{ name: 'fileA', maxCount: 1 }, { 
   const fileBPath = req.files['fileB'][0].path;
   const sensitivity = req.body.sensitivity || 'standard';
 
-  console.log(`[API Server] Starting PDF compare (sensitivity: ${sensitivity})`);
+  const taskId = Date.now().toString() + '_' + Math.random().toString(36).substring(2, 11);
+  console.log(`[API Server] Created comparison task: ${taskId}`);
+
+  tasks.set(taskId, {
+    status: 'running',
+    result: null,
+    error: null,
+    createdAt: Date.now()
+  });
+
+  // Respond immediately with the taskId so the browser doesn't block
+  res.json({ success: true, taskId });
 
   const workerPath = path.join(__dirname, 'workers', 'compare.worker.cjs');
 
@@ -149,29 +173,68 @@ app.post('/compare-pdfs', localUpload.fields([{ name: 'fileA', maxCount: 1 }, { 
   });
 
   worker.on('message', (message) => {
-    // Clean up uploaded temporary files
     try { fs.unlinkSync(fileAPath); } catch (_) {}
     try { fs.unlinkSync(fileBPath); } catch (_) {}
 
-    if (message.success) {
-      res.json(message);
-    } else {
-      res.status(500).json({ success: false, error: message.error || '비교 연산 중 내부 에러가 발생했습니다.' });
+    const task = tasks.get(taskId);
+    if (task) {
+      if (message.success) {
+        task.status = 'completed';
+        task.result = message;
+      } else {
+        task.status = 'failed';
+        task.error = message.error || '비교 연산 중 내부 에러가 발생했습니다.';
+      }
+      tasks.set(taskId, task);
     }
   });
 
   worker.on('error', (err) => {
     try { fs.unlinkSync(fileAPath); } catch (_) {}
     try { fs.unlinkSync(fileBPath); } catch (_) {}
-    console.error('[API Server] Worker error:', err);
-    res.status(500).json({ success: false, error: `비교 엔진 워커 에러: ${err.message}` });
+    console.error(`[API Server] Worker error for task ${taskId}:`, err);
+    
+    const task = tasks.get(taskId);
+    if (task) {
+      task.status = 'failed';
+      task.error = `비교 엔진 워커 에러: ${err.message}`;
+      tasks.set(taskId, task);
+    }
   });
 
   worker.on('exit', (code) => {
     if (code !== 0) {
-      console.warn(`[API Server] Worker exited with code ${code}`);
+      console.warn(`[API Server] Worker for task ${taskId} exited with code ${code}`);
+      const task = tasks.get(taskId);
+      if (task && task.status === 'running') {
+        task.status = 'failed';
+        task.error = `비교 엔진 워커가 비정상적으로 종료되었습니다 (code: ${code}).`;
+        tasks.set(taskId, task);
+      }
     }
   });
+});
+
+// Route 4: Poll Task Status
+app.get('/compare-status/:taskId', (req, res) => {
+  const { taskId } = req.params;
+  const task = tasks.get(taskId);
+
+  if (!task) {
+    return res.status(404).json({ success: false, error: '존재하지 않거나 만료된 작업입니다.' });
+  }
+
+  res.json({
+    success: true,
+    status: task.status,
+    result: task.result,
+    error: task.error
+  });
+
+  // Automatically garbage collect completed/failed task data after it has been retrieved
+  if (task.status === 'completed' || task.status === 'failed') {
+    tasks.delete(taskId);
+  }
 });
 
 // Start listening

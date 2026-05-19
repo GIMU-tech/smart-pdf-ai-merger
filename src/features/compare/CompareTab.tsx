@@ -335,7 +335,9 @@ export function CompareTab({
         // Web Browser environment - Cloud API upload
         const API_URL = window.location.hostname === 'localhost'
           ? 'http://localhost:8080'
-          : 'https://smart-pdf-ai-merger.onrender.com';
+          : (window.location.hostname.includes('vercel.app')
+              ? 'https://smart-pdf-ai-merger.onrender.com'
+              : window.location.origin);
 
         const formData = new FormData();
         formData.append('fileA', fileA);
@@ -353,7 +355,35 @@ export function CompareTab({
         }
 
         const resp = await response.json();
-        if (resp.success) {
+        if (resp.success && resp.taskId) {
+          const taskId = resp.taskId;
+          let completed = false;
+
+          while (!completed) {
+            // Wait 1.5 seconds before polling again
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+
+            const statusRes = await fetch(`${API_URL}/compare-status/${taskId}`);
+            if (!statusRes.ok) {
+              const statusErr = await statusRes.json().catch(() => ({ error: '작업 상태 확인에 실패했습니다.' }));
+              throw new Error(statusErr.error || '작업 상태 확인 오류');
+            }
+
+            const statusData = await statusRes.json();
+            if (statusData.success) {
+              if (statusData.status === 'completed') {
+                setRes(statusData.result.results);
+                completed = true;
+              } else if (statusData.status === 'failed') {
+                throw new Error(statusData.error || '비교 중 오류가 발생했습니다.');
+              }
+              // If status is 'running', the loop continues
+            } else {
+              throw new Error(statusData.error || '서버 작업 조회 실패');
+            }
+          }
+        } else if (resp.success && resp.results) {
+          // Fallback if server directly returns results (legacy/local server without polling)
           setRes(resp.results);
         } else {
           setError(resp.error || '비교 중 오류가 발생했습니다.');

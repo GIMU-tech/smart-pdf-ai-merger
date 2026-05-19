@@ -178,7 +178,9 @@ export default function App() {
         // Web Browser environment
         const API_URL = window.location.hostname === 'localhost'
           ? 'http://localhost:8080'
-          : 'https://smart-pdf-ai-merger.onrender.com';
+          : (window.location.hostname.includes('vercel.app')
+              ? 'https://smart-pdf-ai-merger.onrender.com'
+              : window.location.origin);
 
         const formData = new FormData();
         formData.append('file', outlineFile);
