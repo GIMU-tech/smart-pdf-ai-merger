@@ -1,3 +1,13 @@
+---
+title: AI PDF Toolkit
+emoji: 🚀
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
 # PDF & AI 툴킷 (PDF & AI Toolkit)
 
 비디오, 인쇄 및 출판 분야의 그래픽 디자이너와 검수자를 위한 고정밀 **PDF/AI 텍스트 아웃라인 변환** 및 **시각적/의미론적 3단계 비교(Diff) 하이브리드 검수 프로그램**입니다.
