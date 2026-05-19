@@ -161,8 +161,23 @@ npm run electron:build
 
 새로운 AI 에이전트나 개발자가 이 코드를 수정하고 서버에 반영(배포)하려면 다음 규칙을 반드시 따라야 합니다.
 
-0. **README.md YAML 메타데이터 보존**:
-   이 파일(`README.md`)의 맨 윗부분 1~10번째 줄에 있는 `---` 로 둘러싸인 YAML 설정값(title, sdk, app_port 등)은 허깅페이스가 서버 환경을 구성하는 절대적인 기준점입니다. **어떤 AI 에이전트도 이를 절대 지우거나 훼손해서는 안 됩니다.** 삭제 시 Configuration Error가 발생하며 서버가 다운됩니다.
+0. **README.md YAML 메타데이터 보존 (Configuration Error 방지)**:
+   이 파일(`README.md`)의 맨 윗부분 1~10번째 줄에 있는 `---` 로 둘러싸인 YAML 설정값은 허깅페이스가 서버 환경을 구성하는 절대적인 기준점입니다. **어떤 AI 에이전트도 이를 절대 지우거나 훼손해서는 안 됩니다.** 
+   만약 누군가 이 설정을 삭제하고 깃허브나 허깅페이스에 푸시(Push)할 경우, 허깅페이스 스페이스 메인 화면에 **`Configuration error: Missing configuration in README`** 라는 빨간색 치명적 오류가 발생하며 서버 전체가 완전히 다운됩니다.
+   
+   **[ 🚨 긴급 복구 방법 ]**
+   에러가 발생했다면 당황하지 말고 `README.md` 파일 맨 위에 정확히 아래 코드를 다시 붙여넣고 커밋/푸시하면 서버가 2~3분 내로 정상 복구됩니다.
+   ```yaml
+   ---
+   title: AI PDF Toolkit
+   emoji: 🚀
+   colorFrom: blue
+   colorTo: purple
+   sdk: docker
+   pinned: false
+   app_port: 7860
+   ---
+   ```
 
 1. **GitHub 및 Hugging Face 동기화 배포 전략**:
    본 레포지토리는 GitHub(`origin`)와 Hugging Face 원격 저장소 두 곳을 타겟으로 삼습니다. 수정한 코드를 최종 서버에 반영하려면 아래 명령어 순서를 준수해야 합니다.
