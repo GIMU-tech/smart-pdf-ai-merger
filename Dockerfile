@@ -37,7 +37,6 @@ COPY --from=builder /app/dist ./dist
 # Copy backend server files
 COPY server.cjs ./
 COPY workers/ ./workers/
-COPY bin/ ./bin/
 COPY *.traineddata ./
 
 # Expose default API port
