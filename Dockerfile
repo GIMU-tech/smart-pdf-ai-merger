@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 ENV NODE_ENV=production
-ENV PORT=8080
+ENV PORT=7860
 
 # Install only production runtime npm packages
 COPY package*.json ./
@@ -39,8 +39,12 @@ COPY server.cjs ./
 COPY workers/ ./workers/
 COPY *.traineddata ./
 
-# Expose default API port
-EXPOSE 8080
+# Hugging Face Spaces compatibility: Run as non-root user (UID 1000)
+RUN chown -R 1000:1000 /app && chmod -R 775 /app
+USER 1000
+
+# Expose default API port for Hugging Face Spaces
+EXPOSE 7860
 
 # Start the unified web application (React UI + Express API Backend)
 CMD ["node", "server.cjs"]
