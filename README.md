@@ -145,37 +145,50 @@ npm run electron:build
 
 ---
 
-### 2. 24시간 무정전 클라우드 무료 배포
-사용자가 개인 컴퓨터를 24시간 켜놓지 않고도 안정적으로 사내 서비스를 운영할 수 있습니다.
+### 2. 고성능 24시간 클라우드 배포 (Hugging Face Spaces)
+초기 Render.com(512MB RAM) 배포 시 메모리 부족(OOM) 에러가 발생하여, 현재는 **16GB RAM 및 2코어 CPU를 무료로 제공하는 Hugging Face Spaces**에 Docker SDK로 완벽하게 통합 배포되어 있습니다. 백엔드(Express)와 프론트엔드(React)가 하나의 서버에서 구동됩니다.
 
-#### **A. 프론트엔드 배포 (Vercel / Netlify - 완전 무료)**
-1. 본 레포지토리를 개인 깃허브 계정에 연동합니다.
-2. [Vercel](https://vercel.com/) 또는 [Netlify](https://www.netlify.com/)에 깃허브를 연결하고 `smart-pdf-ai-merger` 저장소를 선택합니다.
-3. 빌드 설정:
-   * **Framework Preset**: `Vite`
-   * **Build Command**: `npm run build`
-   * **Output Directory**: `dist`
-4. 배포가 완료되면 사내 전용 24시간 웹 서비스 접속 주소(예: `https://company-pdf-toolkit.vercel.app`)가 즉시 발급됩니다.
-
-#### **B. 백엔드 API 배포 (Render.com / Google Cloud Run - 완전 무료 구간 지원)**
-본 프로젝트에는 클라우드 서버 환경을 1초 만에 빌드해 주는 `Dockerfile`이 완벽하게 내장되어 있습니다.
-1. [Render.com](https://render.com/) 또는 **Google Cloud Run**에 가입하고 본 저장소를 연결합니다.
-2. 서비스 타입으로 **Web Service (Docker)**를 지정합니다.
-3. 빌드 환경을 **Docker**로 선택하기만 하면, 클라우드 서버가 내장된 `Dockerfile`을 감지하여 리눅스 환경 설정 및 `Ghostscript`와 `MuPDF` 설치를 100% 자동으로 빌드 배포합니다.
-4. 배포 성공 시 백엔드 API 주소(예: `https://smart-pdf-ai-merger.onrender.com`)가 완성되며, 프론트엔드와 안전하게 동기화됩니다.
+* **운영 서버 주소 (즐겨찾기용)**: `https://koohawn-ai-pdf-toolkit.hf.space/`
+* **메인 관리자 페이지**: `https://huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt`
+* **환경 명세**:
+  * **프론트엔드**: Vite 빌드 후 `dist` 폴더를 Express 서버가 정적 서빙합니다.
+  * **백엔드/엔진**: Node.js `server.cjs`가 7860 포트에서 백엔드와 프론트엔드를 동시에 호스팅합니다.
+  * **바이너리 파일(OCR 모델)**: `.traineddata` 파일은 용량이 커서 허깅페이스가 일반 Git 업로드를 거부하므로 반드시 **Git LFS(Large File Storage)**로 트래킹하여 배포됩니다.
 
 ---
 
-## 💡 AI/개발자를 위한 핵심 유지보수 지침
+## 💡 AI/개발자를 위한 핵심 유지보수 지침 (필독)
 
-1. **하이브리드 다중 환경 맵핑 (IPC vs HTTP)**:
+새로운 AI 에이전트나 개발자가 이 코드를 수정하고 서버에 반영(배포)하려면 다음 규칙을 반드시 따라야 합니다.
+
+0. **README.md YAML 메타데이터 보존**:
+   이 파일(`README.md`)의 맨 윗부분 1~10번째 줄에 있는 `---` 로 둘러싸인 YAML 설정값(title, sdk, app_port 등)은 허깅페이스가 서버 환경을 구성하는 절대적인 기준점입니다. **어떤 AI 에이전트도 이를 절대 지우거나 훼손해서는 안 됩니다.** 삭제 시 Configuration Error가 발생하며 서버가 다운됩니다.
+
+1. **GitHub 및 Hugging Face 동기화 배포 전략**:
+   본 레포지토리는 GitHub(`origin`)와 Hugging Face 원격 저장소 두 곳을 타겟으로 삼습니다. 수정한 코드를 최종 서버에 반영하려면 아래 명령어 순서를 준수해야 합니다.
+
+   ```bash
+   # 1. 수정한 코드를 로컬 환경에서 커밋 (LFS 바이너리 파일 포함)
+   git add .
+   git commit -m "Update feature"
+
+   # 2. GitHub 저장소 백업 및 1차 동기화 (내 PC ↔ 깃허브)
+   git push origin main
+
+   # 3. Hugging Face 서버로 실 배포 (강제 덮어쓰기)
+   # 주의: 허깅페이스 토큰은 반드시 Write(쓰기) 권한이 있는 Fine-grained 토큰이어야 합니다.
+   git push -f https://hf_여기에토큰값@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt main:main
+   ```
+   * 위 3번 명령어를 실행하면 약 2~3분 뒤 허깅페이스 서버가 자동으로 새 코드를 빌드하고 서비스를 갱신(`Building` -> `Running`)합니다.
+
+2. **하이브리드 다중 환경 맵핑 (IPC vs HTTP)**:
    * [App.tsx](file:///c:/Users/kkh53/Downloads/smart-pdf-&-ai-merger/src/App.tsx) 및 [CompareTab.tsx](file:///c:/Users/kkh53/Downloads/smart-pdf-&-ai-merger/src/features/compare/CompareTab.tsx)는 클라이언트 실행 시 `window.electronAPI` 객체의 존재 유무를 확인합니다.
    * 일렉트론 래퍼 내에서는 초고속 로컬 파일 IPC(`selectDirectory`, `comparePdfs`)로 무부하 제어하며, 일반 브라우저 환경에서는 백엔드 REST API(/compare-pdfs, /process-outline)로 바이너리를 안전하게 스트리밍하도록 단일 통합 브릿징 설계가 완료되어 있습니다.
 
-2. **인코딩 무결성 준수**:
+3. **인코딩 무결성 준수**:
    * `workers/compare.worker.cjs` 파일 내에는 한국어 리포팅용 문자열("삭제됨", "도형 타입 변경", "아웃라인" 등)이 포함되어 있습니다.
    * 파일 수정 시 PowerShell `Set-Content`나 외부 리디렉션을 사용하면 한글 문자가 UTF-8 바이트로 손상(Mojibake)되므로, 반드시 일반적인 IDE 에디터나 Node.js의 `fs.writeFileSync(..., 'utf8')`로만 편집을 가해야 합니다.
 
-3. **OpenCV 리소스 가비지 컬렉션**:
+4. **OpenCV 리소스 가비지 컬렉션**:
    * OpenCV.js는 웹어셈블리(Wasm) 힙 메모리를 사용하므로 인스턴스 해제가 누락되면 메모리 누수(OOM)가 발생합니다.
    * `compare.worker.cjs` 내의 `detectTextRegions` 함수나 기타 OpenCV 가공 영역이 끝날 때는 반드시 모든 매트릭스 변수에 대해 `.delete()`를 호출하여 자원을 수동 소거해 주어야 합니다.
