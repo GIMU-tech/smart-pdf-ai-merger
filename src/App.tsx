@@ -204,17 +204,31 @@ export default function App() {
             byteNumbers[i] = byteCharacters.charCodeAt(i);
           }
           const byteArray = new Uint8Array(byteNumbers);
-          const blob = new Blob([byteArray], { type: 'application/pdf' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = result.fileName;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
+          const outlinedBlob = new Blob([byteArray], { type: 'application/pdf' });
+          const originalBlob = outlineFile;
+          
+          const baseName = outlineName.trim() || result.originalName || '출력문서';
+          
+          const downloadFile = (blob: Blob, filename: string) => {
+            return new Promise<void>((resolve) => {
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = filename;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              setTimeout(resolve, 300); // 300ms delay to prevent browser blocking multiple downloads
+            });
+          };
 
-          setOutlineSuccess(`웹 아웃라인 문서가 다운로드 폴더로 저장되었습니다! 파일명: ${result.fileName}`);
+          await downloadFile(originalBlob, `(원본)${baseName}.ai`);
+          await downloadFile(originalBlob, `(원본)${baseName}.pdf`);
+          await downloadFile(outlinedBlob, `(인쇄용)${baseName}.pdf`);
+          await downloadFile(outlinedBlob, `(인쇄용)${baseName}.ai`);
+
+          setOutlineSuccess(`웹 아웃라인 문서 4종이 다운로드 폴더로 저장되었습니다! 파일명: ${baseName}`);
           setOutlineFile(null);
           setOutlineName('');
         } else {

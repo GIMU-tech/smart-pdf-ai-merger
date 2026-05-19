@@ -79,9 +79,11 @@ app.post('/process-outline', localUpload.single('file'), (req, res) => {
     return res.status(400).json({ success: false, error: '업로드된 파일이 없습니다.' });
   }
 
-  const filePath = req.file.path;
-  const originalName = req.file.originalname;
-  const cleanName = path.parse(originalName).name || 'document';
+  const file = req.file;
+  const filePath = file.path;
+  // Fix multer's latin1 encoding issue for Korean filenames
+  const originalNameUtf8 = Buffer.from(file.originalname, 'latin1').toString('utf8');
+  const cleanName = path.parse(originalNameUtf8).name || 'document';
   
   // Create output paths in temporary folder
   const printPdfPath = path.join(tempDir, `(인쇄용)${cleanName}_${Date.now()}.pdf`);
@@ -128,6 +130,7 @@ app.post('/process-outline', localUpload.single('file'), (req, res) => {
       res.json({
         success: true,
         fileName: `(인쇄용)${cleanName}.pdf`,
+        originalName: cleanName,
         fileData: base64Data
       });
     } catch (readErr) {
