@@ -518,11 +518,17 @@ async function run() {
     const maxPages = Math.max(nativeA.length, nativeB.length);
     const results  = [];
 
-    // Spawns exactly 2 GhostScript processes in parallel to render all pages at once
-    await Promise.all([
-      renderAllPNGs(fileA, path.join(tempDir, 'a%d.png')).catch(() => {}),
-      renderAllPNGs(fileB, path.join(tempDir, 'b%d.png')).catch(() => {})
-    ]);
+    // Run sequentially to save memory on resource-constrained environments (like Render free tier)
+    try {
+      await renderAllPNGs(fileA, path.join(tempDir, 'a%d.png'));
+    } catch (e) {
+      console.error('[Worker] Error rendering PDF A:', e);
+    }
+    try {
+      await renderAllPNGs(fileB, path.join(tempDir, 'b%d.png'));
+    } catch (e) {
+      console.error('[Worker] Error rendering PDF B:', e);
+    }
 
     for (let p=1; p<=maxPages; p++) {
       const diffs  = [];
@@ -1276,6 +1282,14 @@ async function run() {
   } catch(err) {
     try{ fs.rmdirSync(tempDir,{recursive:true}); }catch(_){}
     parentPort.postMessage({ success:false, error:err.stack });
+  } finally {
+    if (_ocrWorker) {
+      try {
+        await _ocrWorker.terminate();
+        console.log('[Worker] Tesseract OCR worker terminated successfully.');
+      } catch (_) {}
+      _ocrWorker = null;
+    }
   }
 }
 
