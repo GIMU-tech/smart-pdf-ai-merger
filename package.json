@@ -11,6 +11,7 @@
     "build": "node node_modules/vite/bin/vite.js build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
+    "sync": "powershell -NoProfile -ExecutionPolicy Bypass -File ./git-sync.ps1",
     "electron:start": "node node_modules/electron/cli.js .",
     "electron:build": "node node_modules/vite/bin/vite.js build && node node_modules/electron-packager/bin/electron-packager.js . \"PDF & AI Toolkit\" --platform=win32 --arch=x64 --out=release --overwrite --ignore=\"^/src($|/)|tsconfig\\.json|vite\\.config\\.ts|\\.git$\""
   },
