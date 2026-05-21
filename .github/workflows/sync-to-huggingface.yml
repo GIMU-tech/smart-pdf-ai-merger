@@ -13,6 +13,11 @@ jobs:
           fetch-depth: 0
           lfs: true
       - name: Push to hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git remote add hf https://KOOHAWN:${{ secrets.HF_TOKEN }}@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt
+          test -n "$HF_TOKEN"
+          git lfs install
+          git remote add hf https://KOOHAWN:${HF_TOKEN}@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt
+          git lfs push hf main || true
           git push --force hf main:main
