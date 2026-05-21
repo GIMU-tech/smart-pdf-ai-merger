@@ -339,6 +339,56 @@ function pixDiffRatio(dA, dB, W, x, y, w, h) {
   return w*h>0?d/(w*h):0;
 }
 
+function clampBox(box, width, height, pad = 0) {
+  const x = Math.max(0, Math.floor(box.x - pad));
+  const y = Math.max(0, Math.floor(box.y - pad));
+  const x2 = Math.min(width, Math.ceil(box.x + box.w + pad));
+  const y2 = Math.min(height, Math.ceil(box.y + box.h + pad));
+  return { x, y, w: Math.max(0, x2 - x), h: Math.max(0, y2 - y) };
+}
+
+function pastePng(src, dst, dx = 0, dy = 0) {
+  if (!src || !dst) return;
+  for (let y = 0; y < src.height; y++) {
+    const targetY = y + dy;
+    if (targetY < 0 || targetY >= dst.height) continue;
+    for (let x = 0; x < src.width; x++) {
+      const targetX = x + dx;
+      if (targetX < 0 || targetX >= dst.width) continue;
+      const si = (y * src.width + x) * 4;
+      const di = (targetY * dst.width + targetX) * 4;
+      dst.data[di] = src.data[si];
+      dst.data[di + 1] = src.data[si + 1];
+      dst.data[di + 2] = src.data[si + 2];
+      dst.data[di + 3] = src.data[si + 3];
+    }
+  }
+}
+
+function whitePng(width, height) {
+  const png = new PNG({ width, height });
+  png.data.fill(255);
+  return png;
+}
+
+function localDiffRatio(pngA, pngB, boxA, boxB, pad = 2) {
+  const a = clampBox(boxA, pngA.width, pngA.height, pad);
+  const b = clampBox(boxB, pngB.width, pngB.height, pad);
+  if (a.w <= 0 || a.h <= 0 || b.w <= 0 || b.h <= 0) return 1;
+
+  const cropA = cropRegion(pngA, a.x, a.y, a.w, a.h);
+  const cropB = cropRegion(pngB, b.x, b.y, b.w, b.h);
+  const w = Math.max(cropA?.width || 0, cropB?.width || 0);
+  const h = Math.max(cropA?.height || 0, cropB?.height || 0);
+  if (w <= 0 || h <= 0) return 0;
+
+  const canvasA = whitePng(w, h);
+  const canvasB = whitePng(w, h);
+  pastePng(cropA, canvasA);
+  pastePng(cropB, canvasB);
+  return pixDiffRatio(canvasA.data, canvasB.data, w, 0, 0, w, h);
+}
+
 // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
 // MAIN PIPELINE
 // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
@@ -726,7 +776,9 @@ async function run() {
             blocks.push({
               bbox: { x: minX, y: minY, w: maxX - minX, h: maxY - minY },
               elements: elms,
-              textSummary: textSummary.replace(/\s+/g, ' ').trim()
+              textSummary: textSummary.replace(/\s+/g, ' ').trim(),
+              textCount: textElements.length,
+              shapeCount: elms.filter(e => e.type === 'shape').length
             });
           }
 
@@ -777,13 +829,19 @@ async function run() {
                 sim = matchedShapes / Math.max(shapesA.length, shapesB.length || 1);
               }
 
-              if (sim >= 0.3) {
+              const areaA = Math.max(1, bA.bbox.w * bA.bbox.h);
+              const areaB = Math.max(1, bB.bbox.w * bB.bbox.h);
+              const areaSim = Math.min(areaA, areaB) / Math.max(areaA, areaB);
+              const countPenalty = Math.abs(bA.elements.length - bB.elements.length) * 0.025;
+              const shapePenalty = Math.abs(bA.shapeCount - bB.shapeCount) * 0.04;
+
+              if (sim >= 0.3 && areaSim >= 0.25) {
                 const cxA = bA.bbox.x + bA.bbox.w / 2;
                 const cyA = bA.bbox.y + bA.bbox.h / 2;
                 const cxB = bB.bbox.x + bB.bbox.w / 2;
                 const cyB = bB.bbox.y + bB.bbox.h / 2;
                 const dist = Math.sqrt((cxA - cxB) * (cxA - cxB) + (cyA - cyB) * (cyA - cyB));
-                const score = sim - dist * 0.0001;
+                const score = (sim * 0.75) + (areaSim * 0.25) - dist * 0.0001 - countPenalty - shapePenalty;
 
                 candidates.push({ i, j, score, sim });
               }
@@ -822,6 +880,98 @@ async function run() {
               data[idx + 3] = 255;
             }
           }
+        }
+
+        function compareLocalBlockPixels(blockA, blockB) {
+          const pad = 4;
+          const a = clampBox(blockA.bbox, imgA.width, imgA.height, pad);
+          const b = clampBox(blockB.bbox, imgB.width, imgB.height, pad);
+          if (a.w <= 0 || a.h <= 0 || b.w <= 0 || b.h <= 0) return [];
+
+          const cropA = cropRegion(imgA, a.x, a.y, a.w, a.h);
+          const cropB = cropRegion(imgB, b.x, b.y, b.w, b.h);
+          const localW = Math.max(cropA?.width || 0, cropB?.width || 0);
+          const localH = Math.max(cropA?.height || 0, cropB?.height || 0);
+          if (localW <= 0 || localH <= 0) return [];
+
+          const localA = whitePng(localW, localH);
+          const localB = whitePng(localW, localH);
+          pastePng(cropA, localA);
+          pastePng(cropB, localB);
+
+          const diffPng = new PNG({ width: localW, height: localH });
+          const threshold = Math.max(0.01, parseFloat((0.10 - 0.09 * p).toFixed(3)));
+          pixelmatch(localA.data, localB.data, diffPng.data, localW, localH, { threshold, alpha: 0.5 });
+
+          const G = precision >= 90 ? 8 : 14;
+          const cols = Math.ceil(localW / G);
+          const rows = Math.ceil(localH / G);
+          const grid = new Uint8Array(cols * rows);
+
+          for (let y = 0; y < localH; y++) {
+            for (let x = 0; x < localW; x++) {
+              const i = (y * localW + x) * 4;
+              if (diffPng.data[i] === 255 && diffPng.data[i + 1] === 0 && diffPng.data[i + 2] === 0) {
+                grid[Math.floor(y / G) * cols + Math.floor(x / G)] = 1;
+              }
+            }
+          }
+
+          const regions = [];
+          const visited = new Uint8Array(cols * rows);
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              const start = r * cols + c;
+              if (!grid[start] || visited[start]) continue;
+
+              let minC = c, maxC = c, minR = r, maxR = r;
+              const q = [start];
+              visited[start] = 1;
+              while (q.length) {
+                const cur = q.pop();
+                const cr = Math.floor(cur / cols);
+                const cc = cur % cols;
+                if (cc < minC) minC = cc;
+                if (cc > maxC) maxC = cc;
+                if (cr < minR) minR = cr;
+                if (cr > maxR) maxR = cr;
+                for (let dr = -1; dr <= 1; dr++) {
+                  for (let dc = -1; dc <= 1; dc++) {
+                    const nr = cr + dr;
+                    const nc = cc + dc;
+                    const ni = nr * cols + nc;
+                    if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[ni] && !visited[ni]) {
+                      visited[ni] = 1;
+                      q.push(ni);
+                    }
+                  }
+                }
+              }
+
+              const bx = minC * G;
+              const by = minR * G;
+              const bw = Math.min(localW - bx, (maxC - minC + 1) * G);
+              const bh = Math.min(localH - by, (maxR - minR + 1) * G);
+              if (bw < 3 || bh < 3) continue;
+
+              const density = pixDiffRatio(localA.data, localB.data, localW, bx, by, bw, bh);
+              if (density < 0.015) continue;
+
+              regions.push({
+                type: 'design_changed',
+                severity: 'low',
+                desc: `Block internal visual change (${Math.round(bw)}x${Math.round(bh)} px, ${Math.round(density * 100)}%)`,
+                bbox: {
+                  x: Math.min(imgA.width - 1, a.x + bx),
+                  y: Math.min(imgA.height - 1, a.y + by),
+                  width: bw,
+                  height: bh
+                }
+              });
+            }
+          }
+
+          return regions.slice(0, 6);
         }
 
         // Save original image data for display (masking is only for internal pixelmatch)
@@ -960,7 +1110,7 @@ async function run() {
                 });
               } else {
                 // Check color/fill changes visually
-                const visualDiff = pixDiffRatio(imgA.data, imgB.data, W, sa.x, sa.y, sa.w, sa.h);
+                const visualDiff = localDiffRatio(imgA, imgB, sa, sb, 2);
                 if (visualDiff > 0.05) {
                   diffs.push({
                     type: 'shape_modified',
@@ -996,7 +1146,18 @@ async function run() {
               desc: `새 ${sb.shapeType === 'rect' ? '사각형' : '도형'} 추가됨`,
               bbox: { x: sb.x, y: sb.y, width: sb.w, height: sb.h }
             });
+            maskRegion(imgB, sb);
           }
+
+          for (const localDiff of compareLocalBlockPixels(bA, bB)) {
+            diffs.push(localDiff);
+          }
+
+          // Once a block pair has been compared in local coordinates, remove it from
+          // the final page-wide pixel pass so a harmless whole-block move is not
+          // reported again as a large visual change.
+          maskRegion(imgA, bA.bbox, 4);
+          maskRegion(imgB, bB.bbox, 4);
         }
 
         // Process unmatched blocks
@@ -1023,6 +1184,7 @@ async function run() {
               bbox: { x: sa.x, y: sa.y, width: sa.w, height: sa.h }
             });
           }
+          maskRegion(imgA, bA.bbox, 4);
         }
 
         for (const bB of unmatchedB) {
@@ -1048,6 +1210,7 @@ async function run() {
               bbox: { x: sb.x, y: sb.y, width: sb.w, height: sb.h }
             });
           }
+          maskRegion(imgB, bB.bbox, 4);
         }
 
         // Run pixelmatch on the masked images to detect remaining differences (e.g. background or image edits)
