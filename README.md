@@ -189,22 +189,21 @@ npm run electron:build
    ---
    ```
 
-1. **GitHub 및 Hugging Face 동기화 배포 전략**:
-   본 레포지토리는 GitHub(`origin`)와 Hugging Face 원격 저장소 두 곳을 타겟으로 삼습니다. 수정한 코드를 최종 서버에 반영하려면 아래 명령어 순서를 준수해야 합니다.
+1. **GitHub 및 Hugging Face 자동 동기화 배포 전략**:
+   본 레포지토리는 GitHub에 코드가 푸시되면 **GitHub Actions를 통해 자동으로 Hugging Face 스페이스로 코드를 동기화(배포)하도록 구축**되어 있습니다.
 
+   **[최초 1회 필수 세팅]**
+   1. 허깅페이스(Hugging Face) 설정에서 `Write` 권한이 있는 Access Token을 발급받습니다.
+   2. 현재 이 GitHub 저장소의 **Settings > Secrets and variables > Actions** 로 이동합니다.
+   3. **New repository secret** 버튼을 누르고, 이름에 `HF_TOKEN`, 값에 발급받은 허깅페이스 토큰을 넣고 저장합니다.
+
+   이제 코드를 수정하고 깃허브로 푸시하기만 하면 됩니다.
    ```bash
-   # 1. 수정한 코드를 로컬 환경에서 커밋 (LFS 바이너리 파일 포함)
    git add .
    git commit -m "Update feature"
-
-   # 2. GitHub 저장소 백업 및 1차 동기화 (내 PC ↔ 깃허브)
    git push origin main
-
-   # 3. Hugging Face 서버로 실 배포 (강제 덮어쓰기)
-   # 주의: 허깅페이스 토큰은 반드시 Write(쓰기) 권한이 있는 Fine-grained 토큰이어야 합니다.
-   git push -f https://hf_여기에토큰값@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt main:main
    ```
-   * 위 3번 명령어를 실행하면 약 2~3분 뒤 허깅페이스 서버가 자동으로 새 코드를 빌드하고 서비스를 갱신(`Building` -> `Running`)합니다.
+   * 위 명령어로 깃허브에 코드를 밀어 넣으면, 백그라운드에서 GitHub Actions가 자동으로 허깅페이스 서버로 코드를 강제 푸시하며 약 2~3분 뒤 실 배포가 갱신(`Building` -> `Running`)됩니다.
 
 2. **하이브리드 다중 환경 맵핑 (IPC vs HTTP)**:
    * [App.tsx](file:///c:/Users/kkh53/Downloads/smart-pdf-&-ai-merger/src/App.tsx) 및 [CompareTab.tsx](file:///c:/Users/kkh53/Downloads/smart-pdf-&-ai-merger/src/features/compare/CompareTab.tsx)는 클라이언트 실행 시 `window.electronAPI` 객체의 존재 유무를 확인합니다.
