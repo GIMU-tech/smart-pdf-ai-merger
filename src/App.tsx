@@ -53,6 +53,7 @@ export default function App() {
 
   // ── Compare tab state ──
   const [compareResults, setCompareResults] = useState<any[] | null>(null);
+  const [compareExpanded, setCompareExpanded] = useState(false);
 
   // ── Merge handlers ──
   const addMergeFiles = (uploaded: FileList | null) => {
@@ -275,7 +276,7 @@ export default function App() {
       <main className={cn(
         "flex-grow flex flex-col w-full min-h-0 min-w-0 transition-all duration-300",
         activeTab === 'compare'
-          ? compareResults && compareResults.length > 0
+          ? (compareResults && compareResults.length > 0) || compareExpanded
             ? "max-w-none p-6 bg-gray-150/40 h-[calc(100vh-56px)]"
             : "max-w-2xl mx-auto px-6 py-10 gap-6"
           : "max-w-2xl mx-auto px-6 py-10 gap-6"
@@ -533,7 +534,7 @@ export default function App() {
           style={{ display: activeTab === 'compare' ? 'flex' : 'none' }} 
           className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
         >
-          <CompareTab results={compareResults} setRes={setCompareResults} />
+          <CompareTab results={compareResults} setRes={setCompareResults} onExpandChange={setCompareExpanded} />
         </div>
       </main>
     </div>

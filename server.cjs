@@ -140,6 +140,95 @@ app.post('/process-outline', localUpload.single('file'), (req, res) => {
   });
 });
 
+// Route 2.5: Fast Render PDF for Instant Visual Compare (No AI analysis)
+app.post('/quick-render', localUpload.fields([{ name: 'fileA', maxCount: 1 }, { name: 'fileB', maxCount: 1 }]), async (req, res) => {
+  if (!req.files || !req.files['fileA'] || !req.files['fileB']) {
+    return res.status(400).json({ success: false, error: '렌더링할 파일 2개가 모두 필요합니다.' });
+  }
+
+  const fileAPath = req.files['fileA'][0].path;
+  const fileBPath = req.files['fileB'][0].path;
+
+  const tempSubDir = path.join(tempDir, `quick_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
+  try {
+    fs.mkdirSync(tempSubDir, { recursive: true });
+  } catch (err) {
+    try { fs.unlinkSync(fileAPath); } catch (_) {}
+    try { fs.unlinkSync(fileBPath); } catch (_) {}
+    return res.status(500).json({ success: false, error: '임시 디렉토리 생성에 실패했습니다.' });
+  }
+
+  const renderPDF = (filePath, outPattern) => {
+    return new Promise((resolve, reject) => {
+      const args = [
+        '-dSAFER', '-dBATCH', '-dNOPAUSE',
+        '-sDEVICE=png16m', `-r150`,
+        '-dUseCropBox',
+        `-sOutputFile=${outPattern}`,
+      ];
+      if (gsLibPath) {
+        args.unshift(`-I${gsLibPath}`);
+      }
+      args.push(filePath);
+
+      execFile(gsPath, args, (err, stdout, stderr) => {
+        if (err) reject(new Error(stderr || err.message));
+        else resolve();
+      });
+    });
+  };
+
+  try {
+    // Render A and B in parallel using Ghostscript
+    await Promise.all([
+      renderPDF(fileAPath, path.join(tempSubDir, 'a%d.png')),
+      renderPDF(fileBPath, path.join(tempSubDir, 'b%d.png'))
+    ]);
+
+    // Read the directory to find rendered images
+    const files = fs.readdirSync(tempSubDir);
+    const pagesA = [];
+    const pagesB = [];
+
+    // Filter and sort pages
+    const aImages = files.filter(f => f.startsWith('a') && f.endsWith('.png'))
+                         .sort((x, y) => parseInt(x.slice(1)) - parseInt(y.slice(1)));
+    const bImages = files.filter(f => f.startsWith('b') && f.endsWith('.png'))
+                         .sort((x, y) => parseInt(x.slice(1)) - parseInt(y.slice(1)));
+
+    for (const f of aImages) {
+      const pageNum = parseInt(f.slice(1, -4), 10);
+      const imgPath = path.join(tempSubDir, f);
+      const base64 = fs.readFileSync(imgPath).toString('base64');
+      pagesA.push({ page: pageNum, img: `data:image/png;base64,${base64}` });
+    }
+
+    for (const f of bImages) {
+      const pageNum = parseInt(f.slice(1, -4), 10);
+      const imgPath = path.join(tempSubDir, f);
+      const base64 = fs.readFileSync(imgPath).toString('base64');
+      pagesB.push({ page: pageNum, img: `data:image/png;base64,${base64}` });
+    }
+
+    res.json({
+      success: true,
+      pagesA,
+      pagesB
+    });
+
+  } catch (err) {
+    console.error('[API Server] Quick render failed:', err);
+    res.status(500).json({ success: false, error: `초고속 렌더링 실패: ${err.message}` });
+  } finally {
+    // Cleanup temporary files
+    try { fs.unlinkSync(fileAPath); } catch (_) {}
+    try { fs.unlinkSync(fileBPath); } catch (_) {}
+    try {
+      fs.rmSync(tempSubDir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+});
+
 // Route 3: Initiate PDF Comparison (Asynchronous Task)
 app.post('/compare-pdfs', localUpload.fields([{ name: 'fileA', maxCount: 1 }, { name: 'fileB', maxCount: 1 }]), (req, res) => {
   if (!req.files || !req.files['fileA'] || !req.files['fileB']) {

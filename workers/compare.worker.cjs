@@ -189,6 +189,20 @@ function groupTextIntoLines(items) {
   }).filter(line => line.str.length > 0);
 }
 
+// Check if a PNG image is completely blank/white (for super-fast OCR skipping)
+function isImageBlank(png) {
+  if (!png) return true;
+  const data = png.data;
+  const len = data.length;
+  // Check every 4th pixel (step by 16 bytes) for high performance scanning
+  for (let i = 0; i < len; i += 16) {
+    if (data[i] < 250 || data[i+1] < 250 || data[i+2] < 250) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
 // OCR PIPELINE
 
@@ -207,109 +221,6 @@ async function getOCRWorker() {
   return _ocrWorker;
 }
 
-/**
- * preprocess(): OpenCV image preprocessing for OCR accuracy
- * - upscale small regions 2x
- * - CLAHE contrast enhancement
- * - Gaussian denoise
- * - Adaptive threshold for outlined/thin fonts
- */
-function preprocessForOCR(pngCrop) {
-  const { width, height, data } = pngCrop;
-  const src = cv.matFromImageData({ width, height, data });
-
-  const gray = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-  // Upscale tiny regions (text < 30px tall is unreadable)
-  let working = gray;
-  const scaled = new cv.Mat();
-  if (height < 40) {
-    const factor = Math.ceil(40 / height) + 1;
-    cv.resize(gray, scaled, new cv.Size(width*factor, height*factor), 0, 0, cv.INTER_CUBIC);
-    working = scaled;
-  }
-
-  // CLAHE ??contrast limited adaptive histogram equalization
-  const clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
-  const enhanced = new cv.Mat();
-  clahe.apply(working, enhanced);
-
-  // Gaussian denoise
-  const denoised = new cv.Mat();
-  cv.GaussianBlur(enhanced, denoised, new cv.Size(3, 3), 0);
-
-  // Sharpening kernel
-  const kernel = cv.matFromArray(3, 3, cv.CV_32F, [
-    0, -0.5, 0, -0.5, 3, -0.5, 0, -0.5, 0
-  ]);
-  const sharpened = new cv.Mat();
-  cv.filter2D(denoised, sharpened, -1, kernel);
-
-  // Otsu's binarization to perfectly handle both small and large fonts without hollowing
-  const binary = new cv.Mat();
-  cv.threshold(sharpened, binary, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-
-  // Ensure black text on white background (automatically invert if background is dark)
-  const meanVal = cv.mean(binary);
-  if (meanVal[0] < 127) {
-    cv.bitwise_not(binary, binary);
-  }
-
-  // Morphology cleanup & stroke enhancement using MORPH_CLOSE
-  const element = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2, 2));
-  const morph = new cv.Mat();
-  cv.morphologyEx(binary, morph, cv.MORPH_CLOSE, element);
-
-  // Convert back to RGBA for PNG encoding
-  const rgba = new cv.Mat();
-  cv.cvtColor(morph, rgba, cv.COLOR_GRAY2RGBA);
-
-  const outW = rgba.cols, outH = rgba.rows;
-  const outPng = new PNG({ width: outW, height: outH });
-  outPng.data.set(rgba.data);
-
-  src.delete(); gray.delete(); scaled.delete(); enhanced.delete();
-  denoised.delete(); sharpened.delete(); binary.delete(); rgba.delete(); kernel.delete();
-  clahe.delete(); element.delete(); morph.delete();
-
-  return outPng;
-}
-
-/**
- * ocrRegion(): multi-pass OCR with PSM voting
- * Runs Tesseract at PSM.SINGLE_LINE and PSM.SINGLE_BLOCK,
- * picks the result with higher confidence.
- */
-async function ocrRegion(pngCrop, ocr) {
-  // Preprocess
-  let processed;
-  try { processed = preprocessForOCR(pngCrop); }
-  catch(_) { processed = pngCrop; }
-
-  const buf = PNG.sync.write(processed);
-
-  // Pass 1: Single-line mode (best for title/headline text)
-  const r1 = await ocr.recognize(buf, {}, { blocks: false, layoutBlocks: false });
-  const text1 = postProcess(r1.data.text || '');
-  const conf1 = r1.data.confidence || 0;
-
-  // Pass 2: If low confidence, retry with block mode
-  let text2 = '', conf2 = 0;
-  if (conf1 < 65) {
-    try {
-      await ocr.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
-      const r2 = await ocr.recognize(buf);
-      text2 = postProcess(r2.data.text || '');
-      conf2 = r2.data.confidence || 0;
-      await ocr.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE });
-    } catch(_) {}
-  }
-
-  // Vote: pick higher confidence result
-  const winner = (conf2 > conf1 + 10) ? { text: text2, conf: conf2 } : { text: text1, conf: conf1 };
-  return winner;
-}
 
 // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
 // GEOMETRY DETECTION (OpenCV)
@@ -463,21 +374,38 @@ async function run() {
 
     // ?? Mode configuration ??????????????????????????????????????????????????
     // DPI: 150 for default/layout (excellent speed + accurate OCR), 300 for ultra (ultra precision)
-    const DPI = sensitivity === 'ultra' ? 300 : 150;
+    // Parse numeric precision or legacy string mode
+    let precision = 80;
+    if (sensitivity) {
+      if (!isNaN(sensitivity)) {
+        precision = Math.max(1, Math.min(100, parseInt(sensitivity, 10)));
+      } else if (sensitivity === 'ultra') {
+        precision = 95;
+      } else if (sensitivity === 'layout') {
+        precision = 40;
+      }
+    }
 
-    const R   = 72 / DPI; // px ??PDF pt
+    // Set DPI based on precision: >= 90% gets ultra DPI (300) for high-end rendering
+    const DPI = precision >= 90 ? 300 : 150;
 
-    const M = sensitivity === 'ultra'
-      ? { minGeo:1,  geoTol:0.05, textSim:0.99, visTol:0.001, ocrConf:25 } // 珥덉젙諛 寃??(紐⑤뱺 誘몄꽭 李⑥씠 諛??ㅼ감 ?꾧꺽 媛먯?)
-      : sensitivity === 'layout'
-      ? { minGeo:5,  geoTol:1.0,  textSim:0.95, visTol:0.01,  ocrConf:40 } // 援ъ“ 寃??(?띿뒪???ㅼ감 洹뱁엳 ?쇰? ?덉슜, 援ъ“/?꾪삎 以묒떖)
-      : { minGeo:10, geoTol:3.0,  textSim:0.88, visTol:0.06,  ocrConf:55 }; // ?ㅻТ 寃??(1湲??蹂寃쎈룄 ?щ쭔?섎㈃ ?〓룄濡?88%濡??곹뼢)
+    const R   = 72 / DPI; // px to PDF pt
 
-    // ?? Initialise OCR ??????????????????????????????????????????????????????
-    let ocr = null;
-    try { ocr = await getOCRWorker(); } catch(e) {}
+    const p = precision / 100.0;
+    
+    // Smooth interpolations for all detection parameters (1% - 100%)
+    const minGeo = Math.max(1, Math.round(10 - 9 * p));
+    const geoTol = Math.max(0.05, parseFloat((5.0 - 4.95 * p).toFixed(3)));
+    const textSim = Math.max(0.85, parseFloat((0.85 + 0.14 * p).toFixed(3)));
+    const visTol = Math.max(0.001, parseFloat((0.1 - 0.099 * p).toFixed(4)));
+    const ocrConf = Math.max(25, Math.round(70 - 45 * p));
 
-    // ?? Extract native text ?????????????????????????????????????????????????
+    const M = { minGeo, geoTol, textSim, visTol, ocrConf };
+
+    // ⚙⚙ Initialise OCR ⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙
+    // Will be lazily initialized if a page contains no native text
+
+    // ⚙⚙ Extract native text ⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙
     async function getNativeText(filePath) {
       const doc = await pdfjsLib.getDocument({ data: new Uint8Array(fs.readFileSync(filePath)), verbosity:0 }).promise;
       const pages = [];
@@ -504,11 +432,14 @@ async function run() {
 
     // ?? Render all pages with GhostScript in one pass ????????????????????????
     function renderAllPNGs(filePath, outPattern) {
+      const cores = Math.min(4, os.cpus().length || 1);
       return new Promise((res, rej) =>
         execFile(gsPath, [
           '-I' + gsLibPath, '-dSAFER', '-dBATCH', '-dNOPAUSE',
           '-sDEVICE=png16m', `-r${DPI}`,
           '-dUseCropBox',
+          `-dNumRenderingThreads=${cores}`,
+          '-dBufferSpace=1000000000', // 1GB buffer space for speed
           `-sOutputFile=${outPattern}`, filePath
         ], err => err ? rej(err) : res())
       );
@@ -519,15 +450,14 @@ async function run() {
     const results  = [];
 
     // Run sequentially to save memory on resource-constrained environments (like Render free tier)
+    // Render PDF A and B concurrently to maximize CPU usage
     try {
-      await renderAllPNGs(fileA, path.join(tempDir, 'a%d.png'));
+      await Promise.all([
+        renderAllPNGs(fileA, path.join(tempDir, 'a%d.png')),
+        renderAllPNGs(fileB, path.join(tempDir, 'b%d.png'))
+      ]);
     } catch (e) {
-      console.error('[Worker] Error rendering PDF A:', e);
-    }
-    try {
-      await renderAllPNGs(fileB, path.join(tempDir, 'b%d.png'));
-    } catch (e) {
-      console.error('[Worker] Error rendering PDF B:', e);
+      console.error('[Worker] Error rendering PDFs concurrently:', e);
     }
 
     for (let p=1; p<=maxPages; p++) {
@@ -544,6 +474,7 @@ async function run() {
       let contentBoxA = null, contentBoxB = null;
       let s_x = 1.0, s_y = 1.0, t_x = 0.0, t_y = 0.0;
       let imgA = null, imgB = null;
+      let origDataA = null, origDataB = null;
 
       if (!hasA && !hasB) continue;
       if (hasA && !hasB) {
@@ -608,93 +539,21 @@ async function run() {
 
         // Warp Image B to align perfectly with Image A's dimensions and coordinate space
         const srcB = cv.matFromImageData({ width: rawB.width, height: rawB.height, data: rawB.data });
-        const M = cv.matFromArray(2, 3, cv.CV_64F, [s_x, 0, t_x, 0, s_y, t_y]);
+        const affineM = cv.matFromArray(2, 3, cv.CV_64F, [s_x, 0, t_x, 0, s_y, t_y]);
         const dstB = new cv.Mat();
         const dsize = new cv.Size(rawA.width, rawA.height);
         
-        cv.warpAffine(srcB, dstB, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
+        cv.warpAffine(srcB, dstB, affineM, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
 
         imgA = rawA;
         imgB = new PNG({ width: rawA.width, height: rawA.height });
         imgB.data.set(dstB.data);
 
-        srcB.delete(); M.delete(); dstB.delete();
+        srcB.delete(); affineM.delete(); dstB.delete();
 
         const W = imgA.width;
         const H = imgA.height;
-        const handled = []; // px-space rects already processed
-
-        const overlapHandled = (r) => handled.some(h=>overlaps(r,h,4));
-
-        // Vector-aware OCR Region Re-renderer to render target areas at high DPI (supersampled)
-        async function ocrVectorRegion(filePath, bx, by, bw, bh, isA) {
-          let targetX = bx;
-          let targetY = by;
-          let targetW = bw;
-          let targetH = bh;
-
-          if (!isA) {
-            // Inverse transform back to B's original pixel coordinate space
-            targetX = (bx - t_x) / s_x;
-            targetY = (by - t_y) / s_y;
-            targetW = bw / s_x;
-            targetH = bh / s_y;
-          }
-
-          // Dynamic scale factor based on text pixel height in target space
-          let F = 4;
-          if (targetH < 8) {
-            F = 12;
-          } else if (targetH < 12) {
-            F = 8;
-          }
-
-          const targetDPI = DPI * F;
-          const R_base = 72 / DPI;
-
-          // Convert to PDF points
-          const x_pt = targetX * R_base;
-          const y_pt = targetY * R_base;
-          const w_pt = targetW * R_base;
-          const h_pt = targetH * R_base;
-
-          const H_base = isA ? rawA.height : rawB.height;
-          const H_pt_total = H_base * R_base;
-
-          // PDF bottom-left points origin conversion
-          const y_pdf = H_pt_total - (y_pt + h_pt);
-
-          // Padding in points
-          const pad_pt = 3;
-          const x_pdf_padded = Math.floor(Math.max(0, x_pt - pad_pt));
-          const y_pdf_padded = Math.floor(Math.max(0, y_pdf - pad_pt));
-
-          const maxW_pt = H_pt_total * (isA ? rawA.width/rawA.height : rawB.width/rawB.height);
-          const w_pt_padded = Math.ceil(Math.min(maxW_pt - x_pdf_padded, w_pt + pad_pt * 2));
-          const h_pt_padded = Math.ceil(Math.min(H_pt_total - y_pdf_padded, h_pt + pad_pt * 2));
-
-          if (w_pt_padded <= 0 || h_pt_padded <= 0) return { text: '', conf: 0 };
-
-          const tempCropPath = path.join(tempDir, `crop_${p}_${Date.now()}_${Math.random().toString(36).substr(2, 5)}.png`);
-          try {
-            await renderVectorRegion(filePath, p, x_pdf_padded, y_pdf_padded, w_pt_padded, h_pt_padded, targetDPI, tempCropPath);
-            const pngCrop = PNG.sync.read(fs.readFileSync(tempCropPath));
-            try { fs.unlinkSync(tempCropPath); } catch(_) {}
-
-            // Preprocess & run OCR
-            return await ocrRegion(pngCrop, ocr);
-          } catch (err) {
-            console.error('Vector OCR render error:', err);
-            try { fs.unlinkSync(tempCropPath); } catch(_) {}
-            // Fallback to standard crop
-            const cropFallback = cropRegion(isA ? imgA : imgB, bx, by, bw, bh);
-            if (cropFallback) {
-              return await ocrRegion(cropFallback, ocr);
-            }
-            return { text: '', conf: 0 };
-          }
-        }
-
+        
         // Apply affine translation & scaling to Document B's native text coordinates
         const tB = tB_orig.map(item => ({
           ...item,
@@ -704,504 +563,499 @@ async function run() {
           h: s_y * item.h
         }));
 
-        // ── LAYER 2 & 3 ── Layout Block & Text Region Detection (OpenCV) ──────────────────
-        function detectTextRegions(img) {
-          const { width, height, data } = img;
-          const src = cv.matFromImageData({ width, height, data });
-          const gray = new cv.Mat();
-          cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-          
-          const bin = new cv.Mat();
-          cv.adaptiveThreshold(gray, bin, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
-          
-          // Horizontal dilation to connect words into semantic text lines
-          const k = cv.Mat.ones(3, 15, cv.CV_8U); 
-          const morph = new cv.Mat();
-          cv.morphologyEx(bin, morph, cv.MORPH_DILATE, k);
-          
-          const ctrs = new cv.MatVector();
-          const hier = new cv.Mat();
-          cv.findContours(morph, ctrs, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-          
-          const regions = [];
-          for (let i = 0; i < ctrs.size(); i++) {
-            const r = cv.boundingRect(ctrs.get(i));
-            // Filter out pure noise or excessively large graphic blocks
-            if (r.width > 8 && r.height > 6 && r.height < 300) {
-              regions.push({ x: r.x, y: r.y, w: r.width, h: r.height });
-            }
-          }
-          
-          src.delete(); gray.delete(); bin.delete(); k.delete(); morph.delete(); ctrs.delete(); hier.delete();
-          return regions.sort((a,b) => Math.abs(a.y-b.y)>8 ? a.y-b.y : a.x-b.x);
-        }
+        const ocrLinesA = [];
+        const ocrLinesB = [];
 
-        // ── LAYER 1 ── Native Priority & Outlined OCR Fallback (Hybrid Engine) ────────────
-        const regionsB_all = detectTextRegions(imgB);
-        const linesA = groupTextIntoLines(tA);
-        const linesB = groupTextIntoLines(tB);
-        const handledB = new Set(); // indices of linesB that have been matched
-
-        // 1. Compare Native A to Native B, falling back to targeted OCR on B if needed
-        for (const lineA of linesA) {
-          const rA = { x: lineA.x, y: lineA.y, w: lineA.w, h: lineA.h };
-          if (overlapHandled(rA)) continue;
-
-          // Find overlapping line in B (spatial matching)
-          let bestIdx = -1;
-          let bestScore = -1;
-
-          for (let i = 0; i < linesB.length; i++) {
-            if (handledB.has(i)) continue;
-            const lineB = linesB[i];
-
-            const yDiff = Math.abs(lineA.y - lineB.y);
-            // If the lines overlap vertically or are very close (within 16px)
-            if (yDiff < 16) {
-              const textSim = diceSim(lineA.str, lineB.str);
-              const spatialScore = 1.0 - (yDiff / 16);
-              const score = textSim * 0.7 + spatialScore * 0.3;
-
-              if (score > bestScore && (textSim > 0.2 || yDiff < 8)) {
-                bestScore = score;
-                bestIdx = i;
-              }
-            }
-          }
-
-          let strB = '';
-          let lineB = null;
-          let isOcrFallback = false;
-
-          if (bestIdx >= 0) {
-            lineB = linesB[bestIdx];
-            strB = lineB.str;
-            handledB.add(bestIdx);
-          } else {
-            // CASE 2: Native in A, Outlined in B. Run targeted OCR on B
-            if (ocr) {
-              const pad = 6;
-              const { text, conf } = await ocrVectorRegion(fileB,
-                Math.max(0, Math.floor(lineA.x) - pad), Math.max(0, Math.floor(lineA.y) - pad),
-                Math.ceil(lineA.w) + pad * 2, Math.ceil(lineA.h) + pad * 2,
-                false
-              );
-              if (conf >= M.ocrConf) {
-                strB = text;
-                isOcrFallback = true;
-              }
-            }
-          }
-
-          const strA = lineA.str;
-
-          // If no text found in B at this location (or low similarity), search B for a shifted match!
-          let foundShifted = false;
-          if (!strB || diceSim(strA, strB) < 0.3) {
-            // 1. Search in native B lines first
-            const lbMatched = linesB.find(lb => 
-              !handledB.has(linesB.indexOf(lb)) &&
-              Math.abs(lineA.x - lb.x) < 150 &&
-              Math.abs(lineA.y - lb.y) < 150 &&
-              diceSim(strA, lb.str) === 1.0
-            );
-
-            if (lbMatched) {
-              const bIdx = linesB.indexOf(lbMatched);
-              handledB.add(bIdx);
-              const dx = lbMatched.x - lineA.x;
-              const dy = lbMatched.y - lineA.y;
-              const dx_pt = Math.round(dx * R);
-              const dy_pt = Math.round(dy * R);
-
-              diffs.push({
-                type: 'spacing_changed',
-                severity: 'low',
-                desc: `"${strA}" 컨테이너 그룹 이동됨(가로 ${dx_pt}pt, 세로 ${dy_pt}pt 이동, 내용물 일치)`,
-                bbox: { x: lineA.x, y: lineA.y, width: lineA.w, height: lineA.h }
-              });
-
-              handled.push(rA);
-              handled.push({ x: lbMatched.x, y: lbMatched.y, w: lbMatched.w, h: lbMatched.h });
-              foundShifted = true;
-            }
-
-            if (!foundShifted && ocr) {
-              // 2. Search in outlined regions of B
-              const localRegions = regionsB_all.filter(r => 
-                Math.abs(lineA.x - r.x) < 150 && 
-                Math.abs(lineA.y - r.y) < 150 &&
-                !overlapHandled({ x: r.x, y: r.y, w: r.w, h: r.h })
-              );
-
-              for (const rB of localRegions) {
-                const pad = 4;
-                const { text, conf } = await ocrVectorRegion(fileB, rB.x - pad, rB.y - pad, rB.w + pad * 2, rB.h + pad * 2, false);
-                if (conf >= M.ocrConf && text.trim().length > 0) {
-                  const processed = postProcess(text);
-                  if (diceSim(strA, processed) >= M.textSim) {
-                    const dx = rB.x - lineA.x;
-                    const dy = rB.y - lineA.y;
-                    const dx_pt = Math.round(dx * R);
-                    const dy_pt = Math.round(dy * R);
-
-                    diffs.push({
-                      type: 'spacing_changed',
-                      severity: 'low',
-                desc: `"${strA}" 컨테이너 그룹 이동됨(가로 ${dx_pt}pt, 세로 ${dy_pt}pt 이동, 내용물 일치)`,
-                      bbox: { x: lineA.x, y: lineA.y, width: lineA.w, height: lineA.h }
-                    });
-
-                    handled.push(rA);
-                    handled.push({ x: rB.x, y: rB.y, w: rB.w, h: rB.h });
-                    foundShifted = true;
-                    break;
+        // Run whole-page OCR on Page A only if it has very few native text elements (likely scanned/outlined) and is not blank
+        if (tA.length <= 3 && !isImageBlank(rawA)) {
+          const ocr = await getOCRWorker().catch(() => null);
+          if (ocr) {
+            try {
+              const { data } = await ocr.recognize(pA, {}, { blocks: true });
+              if (data && data.blocks) {
+                for (const block of data.blocks) {
+                  if (block.paragraphs) {
+                    for (const para of block.paragraphs) {
+                      if (para.lines) {
+                        for (const line of para.lines) {
+                          const text = postProcess(line.text || '');
+                          if (line.confidence >= M.ocrConf && text.trim().length > 0) {
+                            const x = line.bbox.x0;
+                            const y = line.bbox.y0;
+                            const w = line.bbox.x1 - line.bbox.x0;
+                            const h = line.bbox.y1 - line.bbox.y0;
+                            ocrLinesA.push({ str: text, x, y, w, h });
+                          }
+                        }
+                      }
+                    }
                   }
                 }
               }
+            } catch (err) {
+              console.error('[Worker] OCR A failed:', err);
             }
-          }
-
-          if (foundShifted) continue;
-
-          // If no text found in B at this location, it's a deletion
-          if (!strB) {
-            diffs.push({
-              type: 'text_modified',
-              severity: 'high',
-              before: strA,
-              desc: `"${strA}" 삭제됨`,
-              bbox: { x: lineA.x, y: lineA.y, width: lineA.w, height: lineA.h },
-              textInfo: {
-                beforeStr: strA,
-                afterStr: '',
-                diffs: [[-1, strA]]
-              }
-            });
-            handled.push(rA);
-            continue;
-          }
-
-          const sim = diceSim(strA, strB);
-
-          // Check for numeric differences (critical)
-          const hasNum = /\d/.test(strA) || /\d/.test(strB);
-          const numDiff = hasNum ? numericDiffers(strA, strB) : false;
-
-          // Ignore Rules Engine: 
-          // For OCR fallback, we allow fuzzy matching (M.textSim) to bypass OCR noise.
-          // For Native Text, we require 100% character match (sim === 1.0) because any letter change is a deliberate edit!
-          const requiredSim = (lineB && !isOcrFallback) ? 1.0 : M.textSim;
-
-          if (sim >= requiredSim && !(hasNum && numDiff)) {
-            if (lineB && !isOcrFallback) {
-              // Both are Native Text. Compare bbox and font size!
-              const sizeDiff = Math.abs(lineA.h - lineB.h) * R;
-              const posDiffX = Math.abs(lineA.x - lineB.x) * R;
-              const posDiffY = Math.abs(lineA.y - lineB.y) * R;
-
-              if (sizeDiff > 1.5) { // Font size change > 1.5pt
-                diffs.push({
-                  type: 'style_changed',
-                  severity: 'low',
-                  desc: `"${lineA.str}" 글자 크기 변경(${Math.round(lineA.h * R)}pt → ${Math.round(lineB.h * R)}pt)`,
-                  bbox: { x: lineA.x, y: lineA.y, width: lineA.w, height: lineA.h }
-                });
-              } else if (posDiffX > 3 || posDiffY > 3) { // Spacing/position shift
-                diffs.push({
-                  type: 'spacing_changed',
-                  severity: 'low',
-                desc: `"${strA}" 위치 미세 이동 (XΔ${Math.round(posDiffX)} YΔ${Math.round(posDiffY)} pt)`,
-                  bbox: { x: lineA.x, y: lineA.y, width: lineA.w, height: lineA.h }
-                });
-              }
-            }
-
-            // If it matched via OCR fallback, it means outline-only differences! We ignore it under the Ignore Rules Engine.
-            handled.push(rA);
-            if (lineB) {
-              handled.push({ x: lineB.x, y: lineB.y, w: lineB.w, h: lineB.h });
-            }
-            continue;
-          }
-
-          const type = numDiff || hasNum ? 'number_changed' : 'text_modified';
-          const severity = numDiff ? 'critical' : hasNum ? 'critical' : 'high';
-
-          // Perform character-level diffing using diffLib
-          const diffParts = diffLib.diffChars(strA, strB);
-          const diffsArray = diffParts.map(part => {
-            const op = part.removed ? -1 : part.added ? 1 : 0;
-            return [op, part.value];
-          });
-
-          diffs.push({
-            type,
-            severity,
-            before: strA,
-              desc: `"${strA}" ➔ "${strB}"${isOcrFallback ? ' (아웃라인)' : ''}`,
-            bbox: { x: lineA.x, y: lineA.y, width: lineA.w, height: lineA.h },
-            textInfo: {
-              beforeStr: strA,
-              afterStr: strB,
-              diffs: diffsArray
-            }
-          });
-
-          handled.push(rA);
-          if (lineB) {
-            handled.push({ x: lineB.x, y: lineB.y, w: lineB.w, h: lineB.h });
           }
         }
 
-        // 2. CASE 2 (B has native, A has outlined): For un-matched lines in B, run targeted OCR on A
-        for (let i = 0; i < linesB.length; i++) {
-          if (handledB.has(i)) continue;
-          const lineB = linesB[i];
-          const rB = { x: lineB.x, y: lineB.y, w: lineB.w, h: lineB.h };
-          if (overlapHandled(rB)) continue;
-
-          let strA = '';
-          let isOcrFallback = false;
+        // Run whole-page OCR on Page B only if it has very few native text elements (likely scanned/outlined) and is not blank
+        if (tB_orig.length <= 3 && !isImageBlank(imgB)) {
+          const ocr = await getOCRWorker().catch(() => null);
           if (ocr) {
-            const pad = 6;
-            const { text, conf } = await ocrVectorRegion(fileA,
-              Math.max(0, Math.floor(lineB.x) - pad), Math.max(0, Math.floor(lineB.y) - pad),
-              Math.ceil(lineB.w) + pad * 2, Math.ceil(lineB.h) + pad * 2,
-              true
-            );
-            if (conf >= M.ocrConf) {
-              strA = text;
-              isOcrFallback = true;
+            try {
+              const bufB = PNG.sync.write(imgB);
+              const { data } = await ocr.recognize(bufB, {}, { blocks: true });
+              if (data && data.blocks) {
+                for (const block of data.blocks) {
+                  if (block.paragraphs) {
+                    for (const para of block.paragraphs) {
+                      if (para.lines) {
+                        for (const line of para.lines) {
+                          const text = postProcess(line.text || '');
+                          if (line.confidence >= M.ocrConf && text.trim().length > 0) {
+                            const x = line.bbox.x0;
+                            const y = line.bbox.y0;
+                            const w = line.bbox.x1 - line.bbox.x0;
+                            const h = line.bbox.y1 - line.bbox.y0;
+                            ocrLinesB.push({ str: text, x, y, w, h });
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.error('[Worker] OCR B failed:', err);
+            }
+          }
+        }
+
+        // Group individual native text items into logical lines for accurate comparison
+        const linesA = groupTextIntoLines(tA);
+        const linesB = groupTextIntoLines(tB);
+
+        const tA_processed = [...linesA, ...ocrLinesA];
+        const tB_processed = [...linesB, ...ocrLinesB];
+
+        const geosA = detectGeo(imgA, M.minGeo, tA_processed, contentBoxA);
+        const geosB = detectGeo(imgB, M.minGeo, tB_processed, contentBoxA);
+
+        // Gather all elements
+        const elementsA = [];
+        const elementsB = [];
+
+        for (const line of linesA) {
+          elementsA.push({ type: 'text', str: line.str, x: line.x, y: line.y, w: line.w, h: line.h, original: line });
+        }
+        for (const line of ocrLinesA) {
+          elementsA.push({ type: 'ocr', str: line.str, x: line.x, y: line.y, w: line.w, h: line.h, original: line });
+        }
+        for (const geo of geosA) {
+          elementsA.push({ type: 'shape', shapeType: geo.type, x: geo.x, y: geo.y, w: geo.w, h: geo.h, original: geo });
+        }
+
+        for (const line of linesB) {
+          elementsB.push({ type: 'text', str: line.str, x: line.x, y: line.y, w: line.w, h: line.h, original: line });
+        }
+        for (const line of ocrLinesB) {
+          elementsB.push({ type: 'ocr', str: line.str, x: line.x, y: line.y, w: line.w, h: line.h, original: line });
+        }
+        for (const geo of geosB) {
+          elementsB.push({ type: 'shape', shapeType: geo.type, x: geo.x, y: geo.y, w: geo.w, h: geo.h, original: geo });
+        }
+
+        // Clustering algorithm to group elements into blocks
+        function clusterElements(elements) {
+          const n = elements.length;
+          const parent = Array.from({ length: n }, (_, i) => i);
+
+          function find(i) {
+            if (parent[i] === i) return i;
+            return parent[i] = find(parent[i]);
+          }
+
+          function union(i, j) {
+            const rootI = find(i);
+            const rootJ = find(j);
+            if (rootI !== rootJ) {
+              parent[rootI] = rootJ;
             }
           }
 
-          if (!strA) {
-            // Truly new text in B
+          function isClose(b1, b2) {
+            const padX = 25;
+            const padY = 15;
+            return !(b2.x > b1.x + b1.w + padX ||
+                     b2.x + b2.w < b1.x - padX ||
+                     b2.y > b1.y + b1.h + padY ||
+                     b2.y + b2.h < b1.y - padY);
+          }
+
+          for (let i = 0; i < n; i++) {
+            for (let j = i + 1; j < n; j++) {
+              if (isClose(elements[i], elements[j])) {
+                union(i, j);
+              }
+            }
+          }
+
+          const groups = new Map();
+          for (let i = 0; i < n; i++) {
+            const root = find(i);
+            if (!groups.has(root)) {
+              groups.set(root, []);
+            }
+            groups.get(root).push(elements[i]);
+          }
+
+          const blocks = [];
+          for (const [root, elms] of groups.entries()) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const el of elms) {
+              if (el.x < minX) minX = el.x;
+              if (el.y < minY) minY = el.y;
+              if (el.x + el.w > maxX) maxX = el.x + el.w;
+              if (el.y + el.h > maxY) maxY = el.y + el.h;
+            }
+            
+            const textElements = elms.filter(e => e.type === 'text' || e.type === 'ocr');
+            textElements.sort((a, b) => Math.abs(a.y - b.y) > 8 ? a.y - b.y : a.x - b.x);
+            const textSummary = textElements.map(e => e.str).join(' ');
+
+            blocks.push({
+              bbox: { x: minX, y: minY, w: maxX - minX, h: maxY - minY },
+              elements: elms,
+              textSummary: textSummary.replace(/\s+/g, ' ').trim()
+            });
+          }
+
+          return blocks;
+        }
+
+        // Translation-invariant block matcher
+        function matchBlocks(blocksA, blocksB) {
+          const matchedA = new Set();
+          const matchedB = new Set();
+          const pairs = [];
+          const candidates = [];
+
+          for (let i = 0; i < blocksA.length; i++) {
+            const bA = blocksA[i];
+            const textA = bA.textSummary;
+            const shapesA = bA.elements.filter(e => e.type === 'shape');
+
+            for (let j = 0; j < blocksB.length; j++) {
+              const bB = blocksB[j];
+              const textB = bB.textSummary;
+              const shapesB = bB.elements.filter(e => e.type === 'shape');
+
+              let sim = 0;
+              let hasText = textA.length > 0 || textB.length > 0;
+              let hasShapes = shapesA.length > 0 || shapesB.length > 0;
+
+              if (hasText) {
+                sim = diceSim(textA, textB);
+              } else if (hasShapes) {
+                let matchedShapes = 0;
+                const usedShapesB = new Set();
+                for (const sA of shapesA) {
+                  let bestB = -1;
+                  for (let k = 0; k < shapesB.length; k++) {
+                    if (usedShapesB.has(k)) continue;
+                    const sB = shapesB[k];
+                    if (sA.shapeType === sB.shapeType && Math.abs(sA.w - sB.w) < 20 && Math.abs(sA.h - sB.h) < 20) {
+                      bestB = k;
+                      break;
+                    }
+                  }
+                  if (bestB >= 0) {
+                    matchedShapes++;
+                    usedShapesB.add(bestB);
+                  }
+                }
+                sim = matchedShapes / Math.max(shapesA.length, shapesB.length || 1);
+              }
+
+              if (sim >= 0.3) {
+                const cxA = bA.bbox.x + bA.bbox.w / 2;
+                const cyA = bA.bbox.y + bA.bbox.h / 2;
+                const cxB = bB.bbox.x + bB.bbox.w / 2;
+                const cyB = bB.bbox.y + bB.bbox.h / 2;
+                const dist = Math.sqrt((cxA - cxB) * (cxA - cxB) + (cyA - cyB) * (cyA - cyB));
+                const score = sim - dist * 0.0001;
+
+                candidates.push({ i, j, score, sim });
+              }
+            }
+          }
+
+          candidates.sort((a, b) => b.score - a.score);
+
+          for (const cand of candidates) {
+            if (matchedA.has(cand.i) || matchedB.has(cand.j)) continue;
+            matchedA.add(cand.i);
+            matchedB.add(cand.j);
+            pairs.push({ blockA: blocksA[cand.i], blockB: blocksB[cand.j] });
+          }
+
+          const unmatchedA = blocksA.filter((_, i) => !matchedA.has(i));
+          const unmatchedB = blocksB.filter((_, j) => !matchedB.has(j));
+
+          return { pairs, unmatchedA, unmatchedB };
+        }
+
+        // Mask region helper to prevent pixelmatch errors on matched shifted elements
+        function maskRegion(png, bbox, pad = 2) {
+          const { width, height, data } = png;
+          const x1 = Math.max(0, Math.floor(bbox.x - pad));
+          const y1 = Math.max(0, Math.floor(bbox.y - pad));
+          const x2 = Math.min(width, Math.ceil(bbox.x + bbox.w + pad));
+          const y2 = Math.min(height, Math.ceil(bbox.y + bbox.h + pad));
+          
+          for (let y = y1; y < y2; y++) {
+            for (let x = x1; x < x2; x++) {
+              const idx = (y * width + x) * 4;
+              data[idx]     = 255;
+              data[idx + 1] = 255;
+              data[idx + 2] = 255;
+              data[idx + 3] = 255;
+            }
+          }
+        }
+
+        // Save original image data for display (masking is only for internal pixelmatch)
+        origDataA = Buffer.from(imgA.data);
+        origDataB = Buffer.from(imgB.data);
+
+        const blocksA = clusterElements(elementsA);
+        const blocksB = clusterElements(elementsB);
+        const { pairs, unmatchedA, unmatchedB } = matchBlocks(blocksA, blocksB);
+
+        // Process matched pairs
+        for (const pair of pairs) {
+          const bA = pair.blockA;
+          const bB = pair.blockB;
+
+          // Match text elements inside the block
+          const textsA = bA.elements.filter(e => e.type === 'text' || e.type === 'ocr');
+          const textsB = bB.elements.filter(e => e.type === 'text' || e.type === 'ocr');
+          const matchedTextB = new Set();
+
+          for (const ta of textsA) {
+            let bestB = -1;
+            let bestSim = -1;
+            for (let k = 0; k < textsB.length; k++) {
+              if (matchedTextB.has(k)) continue;
+              const tb = textsB[k];
+              const sim = diceSim(ta.str, tb.str);
+              if (sim > bestSim) {
+                bestSim = sim;
+                bestB = k;
+              }
+            }
+
+            if (bestB >= 0 && bestSim >= M.textSim) {
+              matchedTextB.add(bestB);
+              const tb = textsB[bestB];
+
+              // Check content changes (text strings)
+              if (ta.str !== tb.str) {
+                const hasNum = /\d/.test(ta.str) || /\d/.test(tb.str);
+                const numDiff = hasNum ? numericDiffers(ta.str, tb.str) : false;
+                const type = numDiff ? 'number_changed' : 'text_modified';
+                const severity = numDiff ? 'critical' : 'high';
+                const diffParts = diffLib.diffChars(ta.str, tb.str);
+                const diffsArray = diffParts.map(part => [part.removed ? -1 : part.added ? 1 : 0, part.value]);
+
+                diffs.push({
+                  type,
+                  severity,
+                  before: ta.str,
+                  desc: `"${ta.str}" ➔ "${tb.str}"`,
+                  bbox: { x: ta.x, y: ta.y, width: ta.w, height: ta.h },
+                  textInfo: { beforeStr: ta.str, afterStr: tb.str, diffs: diffsArray }
+                });
+              } else if (ta.type === 'text' && tb.type === 'text') {
+                // Both are native text. Check font size change
+                const sizeDiff = Math.abs(ta.h - tb.h) * R;
+                if (sizeDiff > 1.5) {
+                  diffs.push({
+                    type: 'style_changed',
+                    severity: 'low',
+                    desc: `"${ta.str}" 글자 크기 변경(${Math.round(ta.h * R)}pt → ${Math.round(tb.h * R)}pt)`,
+                    bbox: { x: ta.x, y: ta.y, width: ta.w, height: ta.h }
+                  });
+                }
+              }
+
+              // Mask the element region on both sides to prevent pixelmatch errors
+              maskRegion(imgA, ta);
+              maskRegion(imgB, tb);
+
+            } else {
+              // Unmatched text in A -> Deleted
+              diffs.push({
+                type: 'text_modified',
+                severity: 'high',
+                before: ta.str,
+                desc: `"${ta.str}" 삭제됨`,
+                bbox: { x: ta.x, y: ta.y, width: ta.w, height: ta.h },
+                textInfo: { beforeStr: ta.str, afterStr: '', diffs: [[-1, ta.str]] }
+              });
+            }
+          }
+
+          for (let k = 0; k < textsB.length; k++) {
+            if (matchedTextB.has(k)) continue;
+            const tb = textsB[k];
+            // Unmatched text in B -> Added
             diffs.push({
               type: 'text_modified',
               severity: 'high',
               before: '',
-              desc: `"${lineB.str}" 새로 추가됨`,
-              bbox: { x: lineB.x, y: lineB.y, width: lineB.w, height: lineB.h },
-              textInfo: {
-                beforeStr: '',
-                afterStr: lineB.str,
-                diffs: [[1, lineB.str]]
-              }
+              desc: `"${tb.str}" 새로 추가됨`,
+              bbox: { x: tb.x, y: tb.y, width: tb.w, height: tb.h },
+              textInfo: { beforeStr: '', afterStr: tb.str, diffs: [[1, tb.str]] }
             });
-            handled.push(rB);
-            continue;
           }
 
-          const sim = diceSim(strA, lineB.str);
-          const hasNum = /\d/.test(strA) || /\d/.test(lineB.str);
-          const numDiff = hasNum ? numericDiffers(strA, lineB.str) : false;
+          // Match shape elements inside the block
+          const shapesA = bA.elements.filter(e => e.type === 'shape');
+          const shapesB = bB.elements.filter(e => e.type === 'shape');
+          const matchedShapeB = new Set();
 
-          if (sim >= M.textSim && !(hasNum && numDiff)) {
-            // Outline converted, ignore
-            handled.push(rB);
-            continue;
-          }
-
-
-          const type = numDiff || hasNum ? 'number_changed' : 'text_modified';
-          const severity = numDiff ? 'critical' : hasNum ? 'critical' : 'high';
-          const diffParts = diffLib.diffChars(strA, lineB.str);
-          const diffsArray = diffParts.map(part => [part.removed ? -1 : part.added ? 1 : 0, part.value]);
-
-          diffs.push({
-            type, severity,
-            before: strA,
-              desc: `"${strA}" ➔ "${lineB.str}"${isOcrFallback ? ' (아웃라인)' : ''}`,
-            bbox: { x: lineB.x, y: lineB.y, width: lineB.w, height: lineB.h },
-            textInfo: { beforeStr: strA, afterStr: lineB.str, diffs: diffsArray }
-          });
-          handled.push(rB);
-        }
-
-        const regionsA = detectTextRegions(imgA).filter(r => !overlapHandled({ x: r.x, y: r.y, w: r.w, h: r.h }));
-        const regionsB = detectTextRegions(imgB).filter(r => !overlapHandled({ x: r.x, y: r.y, w: r.w, h: r.h }));
-        const ocrLinesA = [];
-        const ocrLinesB = [];
-
-        if (ocr) {
-          for (const r of regionsA) {
-            const pad = 4;
-            const { text, conf } = await ocrVectorRegion(fileA, r.x-pad, r.y-pad, r.w+pad*2, r.h+pad*2, true);
-            if (conf >= M.ocrConf && text.trim().length > 0) {
-              ocrLinesA.push({ str: postProcess(text), x: r.x, y: r.y, w: r.w, h: r.h });
-            }
-          }
-          for (const r of regionsB) {
-            const pad = 4;
-            const { text, conf } = await ocrVectorRegion(fileB, r.x-pad, r.y-pad, r.w+pad*2, r.h+pad*2, false);
-            if (conf >= M.ocrConf && text.trim().length > 0) {
-              ocrLinesB.push({ str: postProcess(text), x: r.x, y: r.y, w: r.w, h: r.h });
-            }
-          }
-        }
-
-        const groupedOcrA = groupTextIntoLines(ocrLinesA);
-        const groupedOcrB = groupTextIntoLines(ocrLinesB);
-        const handledOcrB = new Set();
-
-        for (const lineA of groupedOcrA) {
-          const rA = { x: lineA.x, y: lineA.y, w: lineA.w, h: lineA.h };
-          if (overlapHandled(rA)) continue;
-
-          let bestIdx = -1;
-          let bestScore = -1;
-          for (let i = 0; i < groupedOcrB.length; i++) {
-            if (handledOcrB.has(i)) continue;
-            const lineB = groupedOcrB[i];
-            const yDiff = Math.abs(lineA.y - lineB.y);
-            if (yDiff < 16) {
-              const textSim = diceSim(lineA.str, lineB.str);
-              const spatialScore = 1.0 - (yDiff / 16);
-              const score = textSim * 0.7 + spatialScore * 0.3;
-              if (score > bestScore && (textSim > 0.2 || yDiff < 8)) {
-                bestScore = score;
-                bestIdx = i;
+          for (const sa of shapesA) {
+            let bestB = -1;
+            let bestIoU = -1;
+            for (let k = 0; k < shapesB.length; k++) {
+              if (matchedShapeB.has(k)) continue;
+              const sb = shapesB[k];
+              if (sa.shapeType === sb.shapeType) {
+                const dw = Math.abs(sa.w - sb.w);
+                const dh = Math.abs(sa.h - sb.h);
+                const sizeSimilarity = 1.0 - (dw + dh) / Math.max(sa.w + sa.h, sb.w + sb.h, 1);
+                if (sizeSimilarity > bestIoU) {
+                  bestIoU = sizeSimilarity;
+                  bestB = k;
+                }
               }
             }
-          }
 
-          if (bestIdx >= 0) {
-            const lineB = groupedOcrB[bestIdx];
-            handledOcrB.add(bestIdx);
-            const numDiff = numericDiffers(lineA.str, lineB.str);
-            const hasNum = /\d/.test(lineA.str) || /\d/.test(lineB.str);
+            if (bestB >= 0 && bestIoU > 0.4) {
+              matchedShapeB.add(bestB);
+              const sb = shapesB[bestB];
 
-            if (diceSim(lineA.str, lineB.str) >= M.textSim && !(hasNum && numDiff)) {
-              handled.push(rA);
-              handled.push({ x: lineB.x, y: lineB.y, w: lineB.w, h: lineB.h });
-              continue;
-            }
+              // Check size change
+              const dw = Math.abs(sa.w - sb.w) * R;
+              const dh = Math.abs(sa.h - sb.h) * R;
 
-            const type = numDiff || hasNum ? 'number_changed' : 'text_modified';
-            const severity = numDiff ? 'critical' : hasNum ? 'critical' : 'high';
-            const diffParts = diffLib.diffChars(lineA.str, lineB.str);
-            const diffsArray = diffParts.map(part => [part.removed ? -1 : part.added ? 1 : 0, part.value]);
+              if (dw > M.geoTol || dh > M.geoTol) {
+                const large = sa.w * R > 150 || sa.h * R > 150;
+                diffs.push({
+                  type: large ? 'layout_changed' : 'shape_resized',
+                  severity: large ? 'high' : 'medium',
+                  desc: `${sa.shapeType === 'rect' ? '사각형' : '도형'} 크기 변경 (가로Δ${Math.round(dw)} 세로Δ${Math.round(dh)} pt)`,
+                  bbox: { x: sa.x, y: sa.y, width: sa.w, height: sa.h }
+                });
+              } else {
+                // Check color/fill changes visually
+                const visualDiff = pixDiffRatio(imgA.data, imgB.data, W, sa.x, sa.y, sa.w, sa.h);
+                if (visualDiff > 0.05) {
+                  diffs.push({
+                    type: 'shape_modified',
+                    severity: 'medium',
+                    desc: '도형 색상/채우기/테두리 변경',
+                    bbox: { x: sa.x, y: sa.y, width: sa.w, height: sa.h }
+                  });
+                }
+              }
 
-            diffs.push({
-              type, severity,
-              before: lineA.str,
-              desc: `"${lineA.str}" ➔ "${lineB.str}" (아웃라인)`,
-              bbox: { x: lineA.x, y: lineA.y, width: lineA.w, height: lineA.h },
-              textInfo: { beforeStr: lineA.str, afterStr: lineB.str, diffs: diffsArray }
-            });
-            handled.push(rA);
-            handled.push({ x: lineB.x, y: lineB.y, w: lineB.w, h: lineB.h });
-          } else {
-            diffs.push({
-              type: 'text_modified', severity: 'high',
-              before: lineA.str,
-              desc: `"${lineA.str}" 삭제됨 (아웃라인)`,
-              bbox: { x: lineA.x, y: lineA.y, width: lineA.w, height: lineA.h },
-              textInfo: { beforeStr: lineA.str, afterStr: '', diffs: [[-1, lineA.str]] }
-            });
-            handled.push(rA);
-          }
-        }
+              // Mask the shape element region on both sides to prevent pixelmatch errors
+              maskRegion(imgA, sa);
+              maskRegion(imgB, sb);
 
-        for (let i = 0; i < groupedOcrB.length; i++) {
-          if (handledOcrB.has(i)) continue;
-          const lineB = groupedOcrB[i];
-          const rB = { x: lineB.x, y: lineB.y, w: lineB.w, h: lineB.h };
-          if (overlapHandled(rB)) continue;
-          diffs.push({
-            type: 'text_modified', severity: 'high',
-            before: '',
-            desc: `"${lineB.str}" 새로 추가됨 (아웃라인)`,
-            bbox: { x: lineB.x, y: lineB.y, width: lineB.w, height: lineB.h },
-            textInfo: { beforeStr: '', afterStr: lineB.str, diffs: [[1, lineB.str]] }
-          });
-          handled.push(rB);
-        }
-
-        const tA_processed = [...tA, ...ocrLinesA];
-        const tB_processed = [...tB, ...ocrLinesB];
-
-        const geosA = detectGeo(imgA, M.minGeo, tA_processed, contentBoxA);
-        const geosB = detectGeo(imgB, M.minGeo, tB_processed, contentBoxA);
-        const usedB = new Set();
-
-        for (const gA of geosA) {
-          const rA = { x:gA.x,y:gA.y,w:gA.w,h:gA.h };
-          if (overlapHandled(rA)) continue;
-
-          let best=-1, bestV=0;
-          for (let i=0; i<geosB.length; i++) {
-            if (usedB.has(i)) continue;
-            const v=iou(gA, geosB[i]);
-            if (v>bestV){ bestV=v; best=i; }
-          }
-
-          const pdfBox = { x:gA.x,y:gA.y,width:gA.w,height:gA.h };
-
-          if (best>=0 && bestV>0.18) {
-            usedB.add(best);
-            const gB=geosB[best];
-            const dw=Math.abs(gA.w-gB.w)*R, dh=Math.abs(gA.h-gB.h)*R;
-            const dx=Math.abs(gA.x-gB.x)*R, dy=Math.abs(gA.y-gB.y)*R;
-            const visualDiff = pixDiffRatio(imgA.data, imgB.data, W, gA.x, gA.y, gA.w, gA.h);
-
-            if (dw>M.geoTol||dh>M.geoTol) {
-              const large = gA.w*R>150||gA.h*R>150;
-              diffs.push({
-                type:large?'layout_changed':'shape_resized',
-                severity:large?'high':'medium',
-                desc:`${gA.type==='rect'?'사각형':'도형'} 크기 변경 (가로Δ${Math.round(dw)} 세로Δ${Math.round(dh)} pt)`,
-                bbox:pdfBox
-              });
-              handled.push(rA);
-            } else if (dx>M.geoTol||dy>M.geoTol) {
-              diffs.push({
-                type:'spacing_changed', severity:'low',
-                desc:`도형 위치 이동 (XΔ${Math.round(dx)} YΔ${Math.round(dy)} pt)`,
-                bbox:pdfBox
-              });
-              handled.push(rA);
-            } else if (gA.type !== gB.type) {
-              diffs.push({
-                type:'shape_modified', severity:'medium',
-                desc:`도형 타입 변경 (${gA.type==='rect'?'사각형':'도형'} ➔ ${gB.type==='rect'?'사각형':'도형'})`,
-                bbox:pdfBox
-              });
-              handled.push(rA);
-            } else if (visualDiff > 0.03) {
-              diffs.push({
-                type:'shape_modified', severity:'medium',
-                desc:'도형 색상/채우기/테두리 변경',
-                bbox:pdfBox
-              });
-              handled.push(rA);
             } else {
-              handled.push(rA);
+              // Unmatched shape in A -> Deleted
+              diffs.push({
+                type: 'layout_changed',
+                severity: 'high',
+                desc: `${sa.shapeType === 'rect' ? '사각형' : '도형'} 삭제됨`,
+                bbox: { x: sa.x, y: sa.y, width: sa.w, height: sa.h }
+              });
             }
-          } else if (best<0||bestV<0.05) {
-            diffs.push({ type:'layout_changed', severity:'high', desc:'도형/블록 삭제됨', bbox:pdfBox });
-            handled.push(rA);
+          }
+
+          for (let k = 0; k < shapesB.length; k++) {
+            if (matchedShapeB.has(k)) continue;
+            const sb = shapesB[k];
+            // Unmatched shape in B -> Added
+            diffs.push({
+              type: 'layout_changed',
+              severity: 'high',
+              desc: `새 ${sb.shapeType === 'rect' ? '사각형' : '도형'} 추가됨`,
+              bbox: { x: sb.x, y: sb.y, width: sb.w, height: sb.h }
+            });
           }
         }
 
-        for (let i=0; i<geosB.length; i++) {
-          if (usedB.has(i)) continue;
-          const gB=geosB[i];
-          const rB={x:gB.x,y:gB.y,w:gB.w,h:gB.h};
-          if (overlapHandled(rB)) continue;
-          diffs.push({ type:'layout_changed', severity:'high', desc:'새 도형/블록 추가됨',
-            bbox:{x:gB.x,y:gB.y,width:gB.w,height:gB.h}
-          });
-          handled.push(rB);
+        // Process unmatched blocks
+        for (const bA of unmatchedA) {
+          const texts = bA.elements.filter(e => e.type === 'text' || e.type === 'ocr');
+          const shapes = bA.elements.filter(e => e.type === 'shape');
+
+          for (const ta of texts) {
+            diffs.push({
+              type: 'text_modified',
+              severity: 'high',
+              before: ta.str,
+              desc: `"${ta.str}" 삭제됨`,
+              bbox: { x: ta.x, y: ta.y, width: ta.w, height: ta.h },
+              textInfo: { beforeStr: ta.str, afterStr: '', diffs: [[-1, ta.str]] }
+            });
+          }
+
+          for (const sa of shapes) {
+            diffs.push({
+              type: 'layout_changed',
+              severity: 'high',
+              desc: `${sa.shapeType === 'rect' ? '사각형' : '도형'} 삭제됨`,
+              bbox: { x: sa.x, y: sa.y, width: sa.w, height: sa.h }
+            });
+          }
         }
 
-        const diffPng = new PNG({ width:W, height:H });
-        const matchThresh = sensitivity === 'ultra' ? 0.01 : sensitivity === 'layout' ? 0.04 : 0.08;
-        pixelmatch(imgA.data, imgB.data, diffPng.data, W, H, { threshold: matchThresh, alpha:0.5 });
+        for (const bB of unmatchedB) {
+          const texts = bB.elements.filter(e => e.type === 'text' || e.type === 'ocr');
+          const shapes = bB.elements.filter(e => e.type === 'shape');
 
-        const G = sensitivity==='ultra'?10:18;
+          for (const tb of texts) {
+            diffs.push({
+              type: 'text_modified',
+              severity: 'high',
+              before: '',
+              desc: `"${tb.str}" 새로 추가됨`,
+              bbox: { x: tb.x, y: tb.y, width: tb.w, height: tb.h },
+              textInfo: { beforeStr: '', afterStr: tb.str, diffs: [[1, tb.str]] }
+            });
+          }
+
+          for (const sb of shapes) {
+            diffs.push({
+              type: 'layout_changed',
+              severity: 'high',
+              desc: `새 ${sb.shapeType === 'rect' ? '사각형' : '도형'} 추가됨`,
+              bbox: { x: sb.x, y: sb.y, width: sb.w, height: sb.h }
+            });
+          }
+        }
+
+        // Run pixelmatch on the masked images to detect remaining differences (e.g. background or image edits)
+        const diffPng = new PNG({ width: W, height: H });
+        const matchThresh = Math.max(0.01, parseFloat((0.10 - 0.09 * p).toFixed(3)));
+        pixelmatch(imgA.data, imgB.data, diffPng.data, W, H, { threshold: matchThresh, alpha: 0.5 });
+
+        const G = sensitivity === 'ultra' ? 10 : 18;
         const edgeStrip = 8;
         const useContentLimit = contentBoxA && contentBoxA.w > 0 && contentBoxA.h > 0;
         const minX = useContentLimit ? Math.max(edgeStrip, contentBoxA.x) : edgeStrip;
@@ -1251,9 +1105,11 @@ async function run() {
     }
 
       if (hasA) {
+        if (imgA && origDataA) imgA.data.set(origDataA);
         base64A = imgA ? PNG.sync.write(imgA).toString('base64') : fs.readFileSync(pA).toString('base64');
       }
       if (hasB) {
+        if (imgB && origDataB) imgB.data.set(origDataB);
         base64B = imgB ? PNG.sync.write(imgB).toString('base64') : fs.readFileSync(pB).toString('base64');
       }
       results.push({
