@@ -8,11 +8,11 @@ jobs:
   sync-to-hub:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://KOOHAWN:$HF_TOKEN@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt main:main
+        run: git push --force https://$HF_TOKEN@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt main:main
