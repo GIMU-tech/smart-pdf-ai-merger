@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { PDFDocument } from 'pdf-lib';
 import {
   Upload, FileText, Loader2, AlertCircle, X, ZoomIn, ZoomOut,
   ChevronLeft, ChevronRight, Hash, Type, LayoutTemplate, Box,
@@ -30,16 +31,15 @@ type PageResult = {
   base64B: string;
 };
 
-// Visual-only rendered pages (from /quick-render)
+// Visual-only pages. In vector mode each src is a single-page PDF blob URL.
 type VisualPage = {
   page: number;
-  imgA: string;  // data:image/png;base64,...
+  imgA: string;
   imgB: string;
 };
 
 type VisualPdfUrls = {
-  a: string;
-  b: string;
+  urls: string[];
 };
 
 type CompareMode = 'ai' | 'visual';
@@ -272,6 +272,24 @@ function PdfVisualLayer({ src, title, className, style }: {
   );
 }
 
+async function splitPdfToSinglePageUrls(file: File) {
+  const bytes = await file.arrayBuffer();
+  const source = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const urls: string[] = [];
+
+  for (let pageIndex = 0; pageIndex < source.getPageCount(); pageIndex++) {
+    const singlePageDoc = await PDFDocument.create();
+    const [page] = await singlePageDoc.copyPages(source, [pageIndex]);
+    singlePageDoc.addPage(page);
+
+    const singlePageBytes = await singlePageDoc.save({ useObjectStreams: true });
+    const blob = new Blob([singlePageBytes], { type: 'application/pdf' });
+    urls.push(URL.createObjectURL(blob));
+  }
+
+  return urls;
+}
+
 function ZoomControls({ zoom, setZoom }: { zoom: number; setZoom: React.Dispatch<React.SetStateAction<number>> }) {
   const [editingZoom, setEditingZoom] = useState(false);
   const [zoomInput, setZoomInput] = useState(String(zoom));
@@ -392,8 +410,7 @@ export function CompareTab({
   useEffect(() => {
     return () => {
       if (visualPdfUrls) {
-        URL.revokeObjectURL(visualPdfUrls.a);
-        URL.revokeObjectURL(visualPdfUrls.b);
+        visualPdfUrls.urls.forEach(url => URL.revokeObjectURL(url));
       }
     };
   }, [visualPdfUrls]);
@@ -540,62 +557,24 @@ export function CompareTab({
 
     try {
       if (isVisualMode) {
-        // ─── Visual Mode: call /quick-render for instant rendering ───
+        // Split into single-page vector PDFs so the review board can page them like AI mode.
         setShowSidebar(false); // auto-hide sidebar in visual mode
-        setCompareStage('PDF 벡터 뷰어 준비 중');
-        const urlA = URL.createObjectURL(fileA);
-        const urlB = URL.createObjectURL(fileB);
-        setVisualPdfUrls({
-          a: urlA,
-          b: urlB,
-        });
-        setVisualPages([{ page: 1, imgA: urlA, imgB: urlB }]);
-        return;
-
-        if (api) {
-          // Desktop Electron: we still render via the server
-          setCompareStage('PDF 렌더링 중');
-          const formData = new FormData();
-          formData.append('fileA', fileA);
-          formData.append('fileB', fileB);
-          const response = await fetch(`${API_URL}/quick-render`, { method: 'POST', body: formData });
-          if (!response.ok) throw new Error('초고속 렌더링 서버 응답 오류');
-          const data = await response.json();
-          if (!data.success) throw new Error(data.error || '렌더링 실패');
-          const pages: VisualPage[] = [];
-          const maxLen = Math.max(data.pagesA.length, data.pagesB.length);
-          for (let i = 0; i < maxLen; i++) {
-            pages.push({
-              page: i + 1,
-              imgA: data.pagesA[i]?.img || '',
-              imgB: data.pagesB[i]?.img || '',
-            });
-          }
-          setVisualPages(pages);
-        } else {
-          // Web environment
-          setCompareStage('PDF 렌더링 중');
-          const formData = new FormData();
-          formData.append('fileA', fileA);
-          formData.append('fileB', fileB);
-          const response = await fetch(`${API_URL}/quick-render`, { method: 'POST', body: formData });
-          if (!response.ok) {
-            const errData = await response.json().catch(() => ({ error: '서버 렌더링 처리 오류' }));
-            throw new Error(errData.error || '서버 응답 오류');
-          }
-          const data = await response.json();
-          if (!data.success) throw new Error(data.error || '렌더링 실패');
-          const pages: VisualPage[] = [];
-          const maxLen = Math.max(data.pagesA.length, data.pagesB.length);
-          for (let i = 0; i < maxLen; i++) {
-            pages.push({
-              page: i + 1,
-              imgA: data.pagesA[i]?.img || '',
-              imgB: data.pagesB[i]?.img || '',
-            });
-          }
-          setVisualPages(pages);
+        setCompareStage('PDF 페이지 분리 중');
+        const [urlsA, urlsB] = await Promise.all([
+          splitPdfToSinglePageUrls(fileA),
+          splitPdfToSinglePageUrls(fileB),
+        ]);
+        const maxLen = Math.max(urlsA.length, urlsB.length);
+        const pages: VisualPage[] = [];
+        for (let i = 0; i < maxLen; i++) {
+          pages.push({
+            page: i + 1,
+            imgA: urlsA[i] || '',
+            imgB: urlsB[i] || '',
+          });
         }
+        setVisualPdfUrls({ urls: [...urlsA, ...urlsB] });
+        setVisualPages(pages);
       } else {
         // ─── AI Mode: call /compare-pdfs with numeric precision ───
         setShowSidebar(true);
