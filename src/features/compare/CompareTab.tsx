@@ -197,7 +197,7 @@ function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, inn
       </div>
       {isVectorPdf ? (
         <iframe
-          src={imgSrc}
+          src={pdfViewerSrc(imgSrc)}
           title={label}
           className="flex-1 w-full bg-white border-0"
         />
@@ -235,6 +235,43 @@ function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, inn
 }
 
 // ─── Zoom Controls Component ───────────────────────────────────────────────────
+function pdfViewerSrc(src: string) {
+  return src.startsWith('blob:') ? `${src}#toolbar=0&navpanes=0&scrollbar=0&view=FitH&page=1` : src;
+}
+
+function PdfVisualLayer({ src, title, className, style }: {
+  src: string;
+  title: string;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  if (!src) {
+    return <div className={cn("absolute inset-0 bg-white", className)} style={style} />;
+  }
+
+  if (src.startsWith('blob:')) {
+    return (
+      <iframe
+        src={pdfViewerSrc(src)}
+        title={title}
+        className={cn("absolute inset-0 w-full h-full border-0 bg-white pointer-events-none", className)}
+        style={style}
+      />
+    );
+  }
+
+  const resolvedSrc = src.startsWith('data:') ? src : `data:image/png;base64,${src}`;
+  return (
+    <img
+      src={resolvedSrc}
+      alt={title}
+      className={cn("absolute inset-0 w-full h-full object-contain select-none", className)}
+      style={style}
+      draggable={false}
+    />
+  );
+}
+
 function ZoomControls({ zoom, setZoom }: { zoom: number; setZoom: React.Dispatch<React.SetStateAction<number>> }) {
   const [editingZoom, setEditingZoom] = useState(false);
   const [zoomInput, setZoomInput] = useState(String(zoom));
@@ -506,7 +543,6 @@ export function CompareTab({
         // ─── Visual Mode: call /quick-render for instant rendering ───
         setShowSidebar(false); // auto-hide sidebar in visual mode
         setCompareStage('PDF 벡터 뷰어 준비 중');
-        setViewMode('side');
         const urlA = URL.createObjectURL(fileA);
         const urlB = URL.createObjectURL(fileB);
         setVisualPdfUrls({
@@ -695,7 +731,7 @@ export function CompareTab({
   const showNoResults = hasAiData && results!.length === 0;
   const showInspection = hasData;
   const compareElapsedLabel = `${Math.floor(compareElapsed / 60)}:${String(compareElapsed % 60).padStart(2, '0')}`;
-  const availableViewModes = (isVisualMode ? ['side'] : ['side', 'swipe', 'overlay']) as Array<'side' | 'swipe' | 'overlay'>;
+  const availableViewModes = ['side', 'swipe', 'overlay'] as Array<'side' | 'swipe' | 'overlay'>;
 
   return (
     <AnimatePresence mode="wait">
@@ -1253,11 +1289,10 @@ export function CompareTab({
                     style={{ width: `${zoom}%`, aspectRatio: '1/1.414' }}
                   >
                     {/* Document A (Background) */}
-                    <img 
-                      src={isVisualMode ? (currentVisualPage?.imgA || '') : `data:image/png;base64,${currentResult?.base64A || ''}`}
-                      className="absolute inset-0 w-full h-full object-contain select-none" 
-                      style={{ imageRendering: zoom > 150 ? 'pixelated' : 'auto' }}
-                      draggable={false} 
+                    <PdfVisualLayer
+                      src={isVisualMode ? (currentVisualPage?.imgA || '') : (currentResult?.base64A || '')}
+                      title="Before preview"
+                      style={{ imageRendering: !isVisualMode && zoom > 150 ? 'pixelated' : 'auto' }}
                     />
                     
                     {/* Document B (Foreground with Clip Path) */}
@@ -1265,11 +1300,10 @@ export function CompareTab({
                       className="absolute inset-0 w-full h-full overflow-hidden"
                       style={{ clipPath: `polygon(0 0, ${sliderPos}% 0, ${sliderPos}% 100%, 0 100%)` }}
                     >
-                      <img 
-                        src={isVisualMode ? (currentVisualPage?.imgB || '') : `data:image/png;base64,${currentResult?.base64B || ''}`}
-                        className="absolute inset-0 w-full h-full object-contain select-none" 
-                        style={{ imageRendering: zoom > 150 ? 'pixelated' : 'auto' }}
-                        draggable={false} 
+                      <PdfVisualLayer
+                        src={isVisualMode ? (currentVisualPage?.imgB || '') : (currentResult?.base64B || '')}
+                        title="After preview"
+                        style={{ imageRendering: !isVisualMode && zoom > 150 ? 'pixelated' : 'auto' }}
                       />
                     </div>
                     
@@ -1361,24 +1395,24 @@ export function CompareTab({
                       style={{ width: `${zoom}%`, aspectRatio: '1/1.414' }}
                     >
                       {/* Base Image A */}
-                      <img 
-                        src={isVisualMode ? (currentVisualPage?.imgA || '') : `data:image/png;base64,${currentResult?.base64A || ''}`}
-                        className="absolute inset-0 w-full h-full object-contain select-none opacity-100" 
-                        style={{ imageRendering: zoom > 150 ? 'pixelated' : 'auto' }}
-                        draggable={false} 
+                      <PdfVisualLayer
+                        src={isVisualMode ? (currentVisualPage?.imgA || '') : (currentResult?.base64A || '')}
+                        title="Before overlay"
+                        className="opacity-100"
+                        style={{ imageRendering: !isVisualMode && zoom > 150 ? 'pixelated' : 'auto' }}
                       />
                       {/* Blended Overlaid Image B */}
-                      <img 
-                        src={isVisualMode ? (currentVisualPage?.imgB || '') : `data:image/png;base64,${currentResult?.base64B || ''}`}
+                      <PdfVisualLayer
+                        src={isVisualMode ? (currentVisualPage?.imgB || '') : (currentResult?.base64B || '')}
+                        title="After overlay"
                         className={cn(
-                          "absolute inset-0 w-full h-full object-contain select-none transition-opacity duration-75",
+                          "transition-opacity duration-75",
                           blendMode === 'difference' ? "mix-blend-difference" : "mix-blend-normal"
                         )}
-                        style={{ 
+                        style={{
                           opacity: overlayOpacity,
-                          imageRendering: zoom > 150 ? 'pixelated' : 'auto'
+                          imageRendering: !isVisualMode && zoom > 150 ? 'pixelated' : 'auto'
                         }}
-                        draggable={false} 
                       />
                     </div>
                   </div>
