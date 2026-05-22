@@ -230,6 +230,13 @@ async function getOCRWorker() {
   return _ocrWorker;
 }
 
+async function resetOCRWorker() {
+  if (_ocrWorker) {
+    try { await _ocrWorker.terminate(); } catch (_) {}
+    _ocrWorker = null;
+  }
+}
+
 
 // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
 // GEOMETRY DETECTION (OpenCV)
@@ -656,48 +663,71 @@ async function run() {
           const sourceForBlankCheck = side === 'A' ? rawA : imgB;
           if (nativeCount > 3 || isImageBlank(sourceForBlankCheck)) return [];
 
-          const ocr = await getOCRWorker().catch(() => null);
-          if (!ocr) return [];
+          const basePixels = sourceForBlankCheck.width * sourceForBlankCheck.height;
+          const maxOcrPixels = 16000000;
+          const preferredDpis = precision >= 90 ? [600, 450, 300] : [450, 300, 220];
+          const dpis = preferredDpis.filter(dpi => basePixels * Math.pow(dpi / DPI, 2) <= maxOcrPixels);
+          if (!dpis.includes(300)) dpis.push(300);
+          if (!dpis.includes(220)) dpis.push(220);
 
-          const ocrDpi = precision >= 90 ? 600 : 450;
-          const scaleToBase = DPI / ocrDpi;
-          const outPath = path.join(tempDir, `ocr_${side}${p}.png`);
+          for (const ocrDpi of dpis) {
+            const scaleToBase = DPI / ocrDpi;
+            const outPath = path.join(tempDir, `ocr_${side}${p}_${ocrDpi}.png`);
 
-          try {
-            await renderOcrPage(filePath, p, outPath, ocrDpi);
-            await ocr.setParameters({
-              tessedit_pageseg_mode: PSM.AUTO,
-              preserve_interword_spaces: '1'
-            }).catch(() => {});
+            try {
+              await renderOcrPage(filePath, p, outPath, ocrDpi);
 
-            const { data } = await ocr.recognize(outPath, {}, { blocks: true });
-            const lines = [];
-            if (data && data.blocks) {
-              for (const block of data.blocks) {
-                if (!block.paragraphs) continue;
-                for (const para of block.paragraphs) {
-                  if (!para.lines) continue;
-                  for (const line of para.lines) {
-                    const text = postProcess(line.text || '');
-                    if (line.confidence < M.ocrConf || text.trim().length === 0) continue;
-                    const baseBox = {
-                      x: line.bbox.x0 * scaleToBase,
-                      y: line.bbox.y0 * scaleToBase,
-                      w: (line.bbox.x1 - line.bbox.x0) * scaleToBase,
-                      h: (line.bbox.y1 - line.bbox.y0) * scaleToBase
-                    };
-                    lines.push({ str: text, ...mapBox(baseBox) });
+              const stat = fs.existsSync(outPath) ? fs.statSync(outPath) : null;
+              if (!stat || stat.size < 1000) {
+                throw new Error(`OCR render produced an empty image at ${ocrDpi} DPI`);
+              }
+
+              // Validate the PNG before handing it to Tesseract. This avoids a worker-level crash
+              // on corrupt or oversized render outputs.
+              const probe = PNG.sync.read(fs.readFileSync(outPath));
+              if (!probe.width || !probe.height || probe.width * probe.height > maxOcrPixels) {
+                throw new Error(`OCR image too large at ${ocrDpi} DPI (${probe.width}x${probe.height})`);
+              }
+
+              const ocr = await getOCRWorker().catch(() => null);
+              if (!ocr) return [];
+
+              await ocr.setParameters({
+                tessedit_pageseg_mode: PSM.AUTO,
+                preserve_interword_spaces: '1'
+              }).catch(() => {});
+
+              const { data } = await ocr.recognize(outPath, {}, { blocks: true });
+              const lines = [];
+              if (data && data.blocks) {
+                for (const block of data.blocks) {
+                  if (!block.paragraphs) continue;
+                  for (const para of block.paragraphs) {
+                    if (!para.lines) continue;
+                    for (const line of para.lines) {
+                      const text = postProcess(line.text || '');
+                      if (line.confidence < M.ocrConf || text.trim().length === 0) continue;
+                      const baseBox = {
+                        x: line.bbox.x0 * scaleToBase,
+                        y: line.bbox.y0 * scaleToBase,
+                        w: (line.bbox.x1 - line.bbox.x0) * scaleToBase,
+                        h: (line.bbox.y1 - line.bbox.y0) * scaleToBase
+                      };
+                      lines.push({ str: text, ...mapBox(baseBox) });
+                    }
                   }
                 }
               }
+              return lines;
+            } catch (err) {
+              console.error(`[Worker] high-res OCR ${side} failed at ${ocrDpi} DPI:`, err);
+              await resetOCRWorker();
+            } finally {
+              try { fs.unlinkSync(outPath); } catch (_) {}
             }
-            return lines;
-          } catch (err) {
-            console.error(`[Worker] high-res OCR ${side} failed:`, err);
-            return [];
-          } finally {
-            try { fs.unlinkSync(outPath); } catch (_) {}
           }
+
+          return [];
         }
 
         ocrLinesA.push(...await recognizeHighResOcrPage(fileA, tA.length, 'A', box => box));
