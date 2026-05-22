@@ -37,6 +37,11 @@ type VisualPage = {
   imgB: string;
 };
 
+type VisualPdfUrls = {
+  a: string;
+  b: string;
+};
+
 type CompareMode = 'ai' | 'visual';
 
 // ─── Severity / Type Metadata ─────────────────────────────────────────────────────
@@ -182,13 +187,21 @@ function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, inn
 
   // Determine if src is already a data URI or needs wrapping
   const resolvedSrc = imgSrc.startsWith('data:') ? imgSrc : `data:image/png;base64,${imgSrc}`;
+  const isVectorPdf = !showDiffs && imgSrc.startsWith('blob:');
   
   return (
     <div className="flex flex-col flex-1 min-w-0 h-full border border-gray-200 bg-white rounded-2xl overflow-hidden shadow-sm">
       <div className="text-[10px] font-black text-gray-500 uppercase tracking-wider px-4 py-2 bg-gray-50 border-b border-gray-100 flex justify-between items-center select-none flex-shrink-0">
         <span>{label}</span>
-        <span className="text-[9px] bg-gray-200/60 text-gray-700 px-2.5 py-0.5 rounded font-mono font-semibold">{zoom}% ZOOM</span>
+        <span className="text-[9px] bg-gray-200/60 text-gray-700 px-2.5 py-0.5 rounded font-mono font-semibold">{isVectorPdf ? 'VECTOR PDF' : `${zoom}% ZOOM`}</span>
       </div>
+      {isVectorPdf ? (
+        <iframe
+          src={imgSrc}
+          title={label}
+          className="flex-1 w-full bg-white border-0"
+        />
+      ) : (
       <div 
         ref={innerRef}
         onScroll={onScroll}
@@ -216,6 +229,7 @@ function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, inn
           ))}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -316,6 +330,7 @@ export function CompareTab({
 
   // Visual-only pages (for 육안 검수 mode)
   const [visualPages, setVisualPages] = useState<VisualPage[] | null>(null);
+  const [visualPdfUrls, setVisualPdfUrls] = useState<VisualPdfUrls | null>(null);
 
   const refA = useRef<HTMLInputElement>(null);
   const refB = useRef<HTMLInputElement>(null);
@@ -336,6 +351,15 @@ export function CompareTab({
     const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
   }, [comparing, compareStartedAt]);
+
+  useEffect(() => {
+    return () => {
+      if (visualPdfUrls) {
+        URL.revokeObjectURL(visualPdfUrls.a);
+        URL.revokeObjectURL(visualPdfUrls.b);
+      }
+    };
+  }, [visualPdfUrls]);
 
   // Ctrl+Wheel zoom handler
   useEffect(() => {
@@ -475,12 +499,22 @@ export function CompareTab({
     setCmp(true);
     setCompareStartedAt(Date.now());
     setCompareStage(isVisualMode ? 'PDF 렌더링 준비 중' : 'PDF 업로드 준비 중');
-    setError(null); setRes(null); setVisualPages(null); setCurrentPageIdx(0); setCheckedItems({});
+    setError(null); setRes(null); setVisualPages(null); setVisualPdfUrls(null); setCurrentPageIdx(0); setCheckedItems({});
 
     try {
       if (isVisualMode) {
         // ─── Visual Mode: call /quick-render for instant rendering ───
         setShowSidebar(false); // auto-hide sidebar in visual mode
+        setCompareStage('PDF 벡터 뷰어 준비 중');
+        setViewMode('side');
+        const urlA = URL.createObjectURL(fileA);
+        const urlB = URL.createObjectURL(fileB);
+        setVisualPdfUrls({
+          a: urlA,
+          b: urlB,
+        });
+        setVisualPages([{ page: 1, imgA: urlA, imgB: urlB }]);
+        return;
 
         if (api) {
           // Desktop Electron: we still render via the server
@@ -608,6 +642,7 @@ export function CompareTab({
     setFileB(null);
     setRes(null);
     setVisualPages(null);
+    setVisualPdfUrls(null);
     setError(null);
     setCmp(false);
     setCompareStartedAt(null);
@@ -660,6 +695,7 @@ export function CompareTab({
   const showNoResults = hasAiData && results!.length === 0;
   const showInspection = hasData;
   const compareElapsedLabel = `${Math.floor(compareElapsed / 60)}:${String(compareElapsed % 60).padStart(2, '0')}`;
+  const availableViewModes = (isVisualMode ? ['side'] : ['side', 'swipe', 'overlay']) as Array<'side' | 'swipe' | 'overlay'>;
 
   return (
     <AnimatePresence mode="wait">
@@ -946,7 +982,7 @@ export function CompareTab({
             <div className="flex items-center gap-2">
               {/* View Mode Selector */}
               <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-xl border border-gray-200">
-                {(['side', 'swipe', 'overlay'] as const).map(m => (
+                {availableViewModes.map(m => (
                   <button
                     key={m}
                     onClick={() => setViewMode(m)}

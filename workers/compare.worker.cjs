@@ -36,6 +36,15 @@ function numericDiffers(a, b) {
   return numsA.some((v,i) => Math.abs(v - numsB[i]) > 1e-6);
 }
 
+function compactText(s) {
+  return (s || '').replace(/\s+/g, '').toUpperCase();
+}
+
+function isCodeLikeText(s) {
+  const compact = compactText(s);
+  return compact.length >= 5 && /[A-Z]/.test(compact) && /\d/.test(compact);
+}
+
 // Post-process OCR text: fix common OCR errors, trim junk
 function postProcess(raw) {
   return raw
@@ -510,6 +519,18 @@ async function run() {
       );
     }
 
+    function renderOcrPage(filePath, pageNum, outPath, ocrDpi) {
+      return new Promise((res, rej) =>
+        execFile(gsPath, [
+          '-I' + gsLibPath, '-dSAFER', '-dBATCH', '-dNOPAUSE',
+          '-sDEVICE=png16m', `-r${ocrDpi}`,
+          '-dUseCropBox',
+          `-dFirstPage=${pageNum}`, `-dLastPage=${pageNum}`,
+          `-sOutputFile=${outPath}`, filePath
+        ], err => err ? rej(err) : res())
+      );
+    }
+
     const [nativeA, nativeB] = await Promise.all([getNativeText(fileA), getNativeText(fileB)]);
     const maxPages = Math.max(nativeA.length, nativeB.length);
     const results  = [];
@@ -631,8 +652,64 @@ async function run() {
         const ocrLinesA = [];
         const ocrLinesB = [];
 
-        // Run whole-page OCR on Page A only if it has very few native text elements (likely scanned/outlined) and is not blank
-        if (tA.length <= 3 && !isImageBlank(rawA)) {
+        async function recognizeHighResOcrPage(filePath, nativeCount, side, mapBox) {
+          const sourceForBlankCheck = side === 'A' ? rawA : imgB;
+          if (nativeCount > 3 || isImageBlank(sourceForBlankCheck)) return [];
+
+          const ocr = await getOCRWorker().catch(() => null);
+          if (!ocr) return [];
+
+          const ocrDpi = precision >= 90 ? 600 : 450;
+          const scaleToBase = DPI / ocrDpi;
+          const outPath = path.join(tempDir, `ocr_${side}${p}.png`);
+
+          try {
+            await renderOcrPage(filePath, p, outPath, ocrDpi);
+            await ocr.setParameters({
+              tessedit_pageseg_mode: PSM.AUTO,
+              preserve_interword_spaces: '1'
+            }).catch(() => {});
+
+            const { data } = await ocr.recognize(outPath, {}, { blocks: true });
+            const lines = [];
+            if (data && data.blocks) {
+              for (const block of data.blocks) {
+                if (!block.paragraphs) continue;
+                for (const para of block.paragraphs) {
+                  if (!para.lines) continue;
+                  for (const line of para.lines) {
+                    const text = postProcess(line.text || '');
+                    if (line.confidence < M.ocrConf || text.trim().length === 0) continue;
+                    const baseBox = {
+                      x: line.bbox.x0 * scaleToBase,
+                      y: line.bbox.y0 * scaleToBase,
+                      w: (line.bbox.x1 - line.bbox.x0) * scaleToBase,
+                      h: (line.bbox.y1 - line.bbox.y0) * scaleToBase
+                    };
+                    lines.push({ str: text, ...mapBox(baseBox) });
+                  }
+                }
+              }
+            }
+            return lines;
+          } catch (err) {
+            console.error(`[Worker] high-res OCR ${side} failed:`, err);
+            return [];
+          } finally {
+            try { fs.unlinkSync(outPath); } catch (_) {}
+          }
+        }
+
+        ocrLinesA.push(...await recognizeHighResOcrPage(fileA, tA.length, 'A', box => box));
+        ocrLinesB.push(...await recognizeHighResOcrPage(fileB, tB_orig.length, 'B', box => ({
+          x: s_x * box.x + t_x,
+          y: s_y * box.y + t_y,
+          w: s_x * box.w,
+          h: s_y * box.h
+        })));
+
+        // Legacy low-resolution OCR fallback is kept disabled; OCR now uses high-DPI renderings above.
+        if (false && tA.length <= 3 && !isImageBlank(rawA)) {
           const ocr = await getOCRWorker().catch(() => null);
           if (ocr) {
             try {
@@ -663,8 +740,7 @@ async function run() {
           }
         }
 
-        // Run whole-page OCR on Page B only if it has very few native text elements (likely scanned/outlined) and is not blank
-        if (tB_orig.length <= 3 && !isImageBlank(imgB)) {
+        if (false && tB_orig.length <= 3 && !isImageBlank(imgB)) {
           const ocr = await getOCRWorker().catch(() => null);
           if (ocr) {
             try {
@@ -1029,7 +1105,7 @@ async function run() {
             for (let k = 0; k < textsB.length; k++) {
               if (matchedTextB.has(k)) continue;
               const tb = textsB[k];
-              const sim = diceSim(ta.str, tb.str);
+              const sim = Math.max(diceSim(ta.str, tb.str), diceSim(compactText(ta.str), compactText(tb.str)));
               if (sim > bestSim) {
                 bestSim = sim;
                 bestB = k;
@@ -1041,21 +1117,23 @@ async function run() {
               const tb = textsB[bestB];
 
               // Check content changes (text strings)
-              if (ta.str !== tb.str) {
-                const hasNum = /\d/.test(ta.str) || /\d/.test(tb.str);
-                const numDiff = hasNum ? numericDiffers(ta.str, tb.str) : false;
+              const compareA = (isCodeLikeText(ta.str) || isCodeLikeText(tb.str)) ? compactText(ta.str) : ta.str;
+              const compareB = (isCodeLikeText(ta.str) || isCodeLikeText(tb.str)) ? compactText(tb.str) : tb.str;
+              if (compareA !== compareB) {
+                const hasNum = /\d/.test(compareA) || /\d/.test(compareB);
+                const numDiff = hasNum ? numericDiffers(compareA, compareB) : false;
                 const type = numDiff ? 'number_changed' : 'text_modified';
                 const severity = numDiff ? 'critical' : 'high';
-                const diffParts = diffLib.diffChars(ta.str, tb.str);
+                const diffParts = diffLib.diffChars(compareA, compareB);
                 const diffsArray = diffParts.map(part => [part.removed ? -1 : part.added ? 1 : 0, part.value]);
 
                 diffs.push({
                   type,
                   severity,
-                  before: ta.str,
-                  desc: `"${ta.str}" ➔ "${tb.str}"`,
+                  before: compareA,
+                  desc: `"${compareA}" -> "${compareB}"`,
                   bbox: { x: ta.x, y: ta.y, width: ta.w, height: ta.h },
-                  textInfo: { beforeStr: ta.str, afterStr: tb.str, diffs: diffsArray }
+                  textInfo: { beforeStr: compareA, afterStr: compareB, diffs: diffsArray }
                 });
               } else if (ta.type === 'text' && tb.type === 'text') {
                 // Both are native text. Check font size change
