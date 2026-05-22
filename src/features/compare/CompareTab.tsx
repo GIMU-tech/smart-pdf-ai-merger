@@ -36,10 +36,18 @@ type VisualPage = {
   page: number;
   imgA: string;
   imgB: string;
+  aspectA?: number;
+  aspectB?: number;
 };
 
 type VisualPdfUrls = {
   urls: string[];
+};
+
+type SinglePagePdfUrl = {
+  url: string;
+  width: number;
+  height: number;
 };
 
 type CompareMode = 'ai' | 'visual';
@@ -158,12 +166,13 @@ function DiffBox({ diff, scale, active, onHover, checked }: {
 }
 
 // ─── Single PDF Viewer Pane (supports crisp-edges 5000% zoom) ─────────────────
-function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, innerRef, zoom = 100, showDiffs = true }: {
+function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, innerRef, zoom = 100, showDiffs = true, aspectRatio }: {
   imgSrc: string; diffs: Diff[]; label: string; activeDiff: number | null;
   checkedItems: Record<string, boolean>; onScroll?: (e: React.UIEvent<HTMLDivElement>) => void;
   innerRef?: React.RefObject<HTMLDivElement | null>;
   zoom?: number;
   showDiffs?: boolean;
+  aspectRatio?: number;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const [scale, setScale] = useState(1);
@@ -196,11 +205,27 @@ function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, inn
         <span className="text-[9px] bg-gray-200/60 text-gray-700 px-2.5 py-0.5 rounded font-mono font-semibold">{isVectorPdf ? 'VECTOR PDF' : `${zoom}% ZOOM`}</span>
       </div>
       {isVectorPdf ? (
-        <iframe
-          src={pdfViewerSrc(imgSrc)}
-          title={label}
-          className="flex-1 w-full bg-white border-0"
-        />
+        <div
+          ref={innerRef}
+          onScroll={onScroll}
+          className="relative overflow-auto bg-gray-100 flex-1 scrollbar-thin p-3"
+        >
+          <div
+            className="relative mx-auto bg-white shadow-sm"
+            style={{
+              width: `${zoom}%`,
+              aspectRatio: aspectRatio || 1 / 1.414,
+              minWidth: zoom > 100 ? `${zoom}%` : undefined
+            }}
+          >
+            <iframe
+              src={pdfViewerSrc(imgSrc)}
+              title={label}
+              className="absolute inset-0 w-full h-full bg-white border-0 pointer-events-none"
+              tabIndex={-1}
+            />
+          </div>
+        </div>
       ) : (
       <div 
         ref={innerRef}
@@ -239,11 +264,12 @@ function pdfViewerSrc(src: string) {
   return src.startsWith('blob:') ? `${src}#toolbar=0&navpanes=0&scrollbar=0&view=FitH&page=1` : src;
 }
 
-function PdfVisualLayer({ src, title, className, style }: {
+function PdfVisualLayer({ src, title, className, style, aspectRatio }: {
   src: string;
   title: string;
   className?: string;
   style?: React.CSSProperties;
+  aspectRatio?: number;
 }) {
   if (!src) {
     return <div className={cn("absolute inset-0 bg-white", className)} style={style} />;
@@ -255,7 +281,8 @@ function PdfVisualLayer({ src, title, className, style }: {
         src={pdfViewerSrc(src)}
         title={title}
         className={cn("absolute inset-0 w-full h-full border-0 bg-white pointer-events-none", className)}
-        style={style}
+        style={{ aspectRatio, ...style }}
+        tabIndex={-1}
       />
     );
   }
@@ -272,19 +299,20 @@ function PdfVisualLayer({ src, title, className, style }: {
   );
 }
 
-async function splitPdfToSinglePageUrls(file: File) {
+async function splitPdfToSinglePageUrls(file: File): Promise<SinglePagePdfUrl[]> {
   const bytes = await file.arrayBuffer();
   const source = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  const urls: string[] = [];
+  const urls: SinglePagePdfUrl[] = [];
 
   for (let pageIndex = 0; pageIndex < source.getPageCount(); pageIndex++) {
     const singlePageDoc = await PDFDocument.create();
     const [page] = await singlePageDoc.copyPages(source, [pageIndex]);
+    const { width, height } = page.getSize();
     singlePageDoc.addPage(page);
 
     const singlePageBytes = await singlePageDoc.save({ useObjectStreams: true });
     const blob = new Blob([singlePageBytes], { type: 'application/pdf' });
-    urls.push(URL.createObjectURL(blob));
+    urls.push({ url: URL.createObjectURL(blob), width, height });
   }
 
   return urls;
@@ -569,11 +597,13 @@ export function CompareTab({
         for (let i = 0; i < maxLen; i++) {
           pages.push({
             page: i + 1,
-            imgA: urlsA[i] || '',
-            imgB: urlsB[i] || '',
+            imgA: urlsA[i]?.url || '',
+            imgB: urlsB[i]?.url || '',
+            aspectA: urlsA[i] ? urlsA[i].width / urlsA[i].height : undefined,
+            aspectB: urlsB[i] ? urlsB[i].width / urlsB[i].height : undefined,
           });
         }
-        setVisualPdfUrls({ urls: [...urlsA, ...urlsB] });
+        setVisualPdfUrls({ urls: [...urlsA, ...urlsB].map(page => page.url) });
         setVisualPages(pages);
       } else {
         // ─── AI Mode: call /compare-pdfs with numeric precision ───
@@ -971,8 +1001,8 @@ export function CompareTab({
           ref={viewerContainerRef}
         >
           {/* ── 1. Header Control HUD ── */}
-          <div className="flex items-center justify-between px-4 h-14 border-b border-gray-200 bg-white flex-shrink-0 z-10 shadow-sm select-none">
-            <div className="flex items-center gap-2">
+          <div className={cn("flex items-center justify-between px-3 h-11 border-b border-gray-200 bg-white flex-shrink-0 z-10 shadow-sm select-none", isVisualMode && "hidden")}>
+            <div className={cn("flex items-center gap-2", isVisualMode && "hidden")}>
               <button 
                 onClick={resetAll}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-800 rounded-xl text-[10.5px] font-black border border-gray-150 transition-all active:scale-95 cursor-pointer"
@@ -1065,6 +1095,48 @@ export function CompareTab({
 
           {/* ── 2. Workspace Body ── */}
           <div className="flex flex-1 min-h-0">
+            {isVisualMode && (
+              <div className="w-16 flex-shrink-0 border-r border-gray-200 bg-white p-2 flex flex-col items-center gap-2 shadow-sm select-none">
+                <button onClick={resetAll} className="w-11 h-9 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-600 flex items-center justify-center cursor-pointer" title="새 파일">
+                  <ArrowRight className="w-4 h-4 rotate-180" />
+                </button>
+                <div className="w-full h-px bg-gray-200" />
+                {availableViewModes.map(m => (
+                  <button
+                    key={m}
+                    onClick={() => setViewMode(m)}
+                    className={cn(
+                      "w-11 h-9 rounded-xl border flex items-center justify-center transition-all cursor-pointer",
+                      viewMode === m ? "bg-gray-900 text-white border-gray-900 shadow-md" : "bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100 hover:text-gray-800"
+                    )}
+                    title={m === 'side' ? '듀얼' : m === 'swipe' ? '슬라이더' : '오버레이'}
+                  >
+                    {m === 'side' && <Columns className="w-4 h-4" />}
+                    {m === 'swipe' && <Split className="w-4 h-4" />}
+                    {m === 'overlay' && <Layers className="w-4 h-4" />}
+                  </button>
+                ))}
+                <div className="w-full h-px bg-gray-200" />
+                <button onClick={() => { setCurrentPageIdx(p => Math.max(0, p - 1)); setActiveDiff(null); }} disabled={currentPageIdx === 0} className="w-11 h-9 rounded-xl border border-gray-200 bg-gray-50 text-gray-500 disabled:opacity-25 hover:bg-gray-100 cursor-pointer flex items-center justify-center" title="이전 페이지">
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <div className="text-[10px] font-black text-gray-700 leading-tight text-center">
+                  <div>{currentPageIdx + 1}</div>
+                  <div className="text-gray-400">/ {totalPages}</div>
+                </div>
+                <button onClick={() => { setCurrentPageIdx(p => Math.min(totalPages - 1, p + 1)); setActiveDiff(null); }} disabled={currentPageIdx === totalPages - 1} className="w-11 h-9 rounded-xl border border-gray-200 bg-gray-50 text-gray-500 disabled:opacity-25 hover:bg-gray-100 cursor-pointer flex items-center justify-center" title="다음 페이지">
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                <div className="w-full h-px bg-gray-200" />
+                <button onClick={() => setZoom(z => clampZoom(z + getZoomStep(z, 'in')))} className="w-11 h-9 rounded-xl border border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100 cursor-pointer flex items-center justify-center" title="확대">
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+                <div className="text-[10px] font-black text-gray-700">{zoom}%</div>
+                <button onClick={() => setZoom(z => clampZoom(z - getZoomStep(z, 'out')))} className="w-11 h-9 rounded-xl border border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100 cursor-pointer flex items-center justify-center" title="축소">
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             
             {/* ── Left Interactive Change Sidebar (AI mode only, collapsible) ── */}
             {!isVisualMode && (
@@ -1191,7 +1263,7 @@ export function CompareTab({
             )}
 
             {/* ── Center Panel — View Modes ── */}
-            <div className="flex-1 flex flex-col bg-gray-100 p-4 overflow-hidden min-w-0">
+            <div className="flex-1 flex flex-col bg-gray-100 p-2 overflow-hidden min-w-0">
               
               {/* Info HUD (AI mode only) */}
               {!isVisualMode && (
@@ -1206,7 +1278,7 @@ export function CompareTab({
               )}
 
               {/* Visual mode info */}
-              {isVisualMode && (
+              {isVisualMode && false && (
                 <div className="mb-3 bg-amber-50 border border-amber-200 rounded-xl p-2.5 flex items-center justify-between shadow-sm select-none flex-shrink-0">
                   <div className="flex items-center gap-2">
                     <Eye className="w-3.5 h-3.5 text-amber-600" />
@@ -1230,6 +1302,7 @@ export function CompareTab({
                     checkedItems={checkedItems}
                     zoom={zoom}
                     showDiffs={!isVisualMode}
+                    aspectRatio={currentVisualPage?.aspectA}
                   />
                   
                   {/* Floating scroll lock indicator */}
@@ -1256,6 +1329,7 @@ export function CompareTab({
                     checkedItems={checkedItems}
                     zoom={zoom}
                     showDiffs={!isVisualMode}
+                    aspectRatio={currentVisualPage?.aspectB}
                   />
                 </div>
               )}
@@ -1265,12 +1339,13 @@ export function CompareTab({
                 <div className="flex-1 border border-gray-200 rounded-2xl overflow-auto shadow-sm relative bg-gray-100 flex items-center justify-center select-none p-4 min-h-0 scrollbar-thin">
                   <div 
                     className="relative overflow-hidden bg-white border border-gray-200 rounded-xl shadow-lg"
-                    style={{ width: `${zoom}%`, aspectRatio: '1/1.414' }}
+                    style={{ width: `${zoom}%`, aspectRatio: currentVisualPage?.aspectA || 1 / 1.414 }}
                   >
                     {/* Document A (Background) */}
                     <PdfVisualLayer
                       src={isVisualMode ? (currentVisualPage?.imgA || '') : (currentResult?.base64A || '')}
                       title="Before preview"
+                      aspectRatio={currentVisualPage?.aspectA}
                       style={{ imageRendering: !isVisualMode && zoom > 150 ? 'pixelated' : 'auto' }}
                     />
                     
@@ -1282,6 +1357,7 @@ export function CompareTab({
                       <PdfVisualLayer
                         src={isVisualMode ? (currentVisualPage?.imgB || '') : (currentResult?.base64B || '')}
                         title="After preview"
+                        aspectRatio={currentVisualPage?.aspectB}
                         style={{ imageRendering: !isVisualMode && zoom > 150 ? 'pixelated' : 'auto' }}
                       />
                     </div>
@@ -1371,19 +1447,21 @@ export function CompareTab({
                   <div className="flex-1 border border-gray-200 rounded-2xl overflow-auto shadow-sm relative bg-gray-100 flex items-center justify-center p-4 min-h-0 scrollbar-thin">
                     <div 
                       className="relative overflow-hidden bg-white border border-gray-200 rounded-lg shadow-lg"
-                      style={{ width: `${zoom}%`, aspectRatio: '1/1.414' }}
+                      style={{ width: `${zoom}%`, aspectRatio: currentVisualPage?.aspectA || 1 / 1.414 }}
                     >
                       {/* Base Image A */}
                       <PdfVisualLayer
                         src={isVisualMode ? (currentVisualPage?.imgA || '') : (currentResult?.base64A || '')}
                         title="Before overlay"
                         className="opacity-100"
+                        aspectRatio={currentVisualPage?.aspectA}
                         style={{ imageRendering: !isVisualMode && zoom > 150 ? 'pixelated' : 'auto' }}
                       />
                       {/* Blended Overlaid Image B */}
                       <PdfVisualLayer
                         src={isVisualMode ? (currentVisualPage?.imgB || '') : (currentResult?.base64B || '')}
                         title="After overlay"
+                        aspectRatio={currentVisualPage?.aspectB}
                         className={cn(
                           "transition-opacity duration-75",
                           blendMode === 'difference' ? "mix-blend-difference" : "mix-blend-normal"
