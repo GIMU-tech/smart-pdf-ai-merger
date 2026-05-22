@@ -389,6 +389,21 @@ function localDiffRatio(pngA, pngB, boxA, boxB, pad = 2) {
   return pixDiffRatio(canvasA.data, canvasB.data, w, 0, 0, w, h);
 }
 
+function sampledDiffRatio(dA, dB, W, x, y, w, h, step = 4) {
+  let changed = 0;
+  let total = 0;
+  for (let row = y; row < y + h; row += step) {
+    for (let col = x; col < x + w; col += step) {
+      const i = (row * W + col) * 4;
+      if (Math.abs(dA[i] - dB[i]) > 22 || Math.abs(dA[i + 1] - dB[i + 1]) > 22 || Math.abs(dA[i + 2] - dB[i + 2]) > 22) {
+        changed++;
+      }
+      total++;
+    }
+  }
+  return total > 0 ? changed / total : 0;
+}
+
 // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
 // MAIN PIPELINE
 // ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧
@@ -653,7 +668,7 @@ async function run() {
           const ocr = await getOCRWorker().catch(() => null);
           if (ocr) {
             try {
-              const bufB = PNG.sync.write(imgB);
+              const bufB = PNG.sync.write(imgB, { deflateLevel: 1 });
               const { data } = await ocr.recognize(bufB, {}, { blocks: true });
               if (data && data.blocks) {
                 for (const block of data.blocks) {
@@ -883,6 +898,10 @@ async function run() {
         }
 
         function compareLocalBlockPixels(blockA, blockB) {
+          const hasText = blockA.textCount > 0 || blockB.textCount > 0;
+          const hasShapes = blockA.shapeCount > 0 || blockB.shapeCount > 0;
+          if (hasText && !hasShapes && precision < 90) return [];
+
           const pad = 4;
           const a = clampBox(blockA.bbox, imgA.width, imgA.height, pad);
           const b = clampBox(blockB.bbox, imgB.width, imgB.height, pad);
@@ -898,6 +917,18 @@ async function run() {
           const localB = whitePng(localW, localH);
           pastePng(cropA, localA);
           pastePng(cropB, localB);
+
+          const maxExactPixels = precision >= 90 ? 900000 : 360000;
+          if (localW * localH > maxExactPixels) {
+            const ratio = sampledDiffRatio(localA.data, localB.data, localW, 0, 0, localW, localH, precision >= 90 ? 3 : 5);
+            if (ratio < 0.02) return [];
+            return [{
+              type: 'design_changed',
+              severity: 'low',
+              desc: `Large block internal visual change (${Math.round(localW)}x${Math.round(localH)} px, ~${Math.round(ratio * 100)}%)`,
+              bbox: { x: a.x, y: a.y, width: a.w, height: a.h }
+            }];
+          }
 
           const diffPng = new PNG({ width: localW, height: localH });
           const threshold = Math.max(0.01, parseFloat((0.10 - 0.09 * p).toFixed(3)));
@@ -1269,11 +1300,11 @@ async function run() {
 
       if (hasA) {
         if (imgA && origDataA) imgA.data.set(origDataA);
-        base64A = imgA ? PNG.sync.write(imgA).toString('base64') : fs.readFileSync(pA).toString('base64');
+        base64A = imgA ? PNG.sync.write(imgA, { deflateLevel: 1 }).toString('base64') : fs.readFileSync(pA).toString('base64');
       }
       if (hasB) {
         if (imgB && origDataB) imgB.data.set(origDataB);
-        base64B = imgB ? PNG.sync.write(imgB).toString('base64') : fs.readFileSync(pB).toString('base64');
+        base64B = imgB ? PNG.sync.write(imgB, { deflateLevel: 1 }).toString('base64') : fs.readFileSync(pB).toString('base64');
       }
       results.push({
         page: p,

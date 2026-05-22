@@ -289,6 +289,9 @@ export function CompareTab({
   const [fileA, setFileA] = useState<File | null>(null);
   const [fileB, setFileB] = useState<File | null>(null);
   const [comparing, setCmp] = useState(false);
+  const [compareStage, setCompareStage] = useState('');
+  const [compareElapsed, setCompareElapsed] = useState(0);
+  const [compareStartedAt, setCompareStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentPageIdx, setCurrentPageIdx] = useState(0);
   const [activeDiff, setActiveDiff] = useState<number | null>(null);
@@ -321,6 +324,18 @@ export function CompareTab({
   const scrollRefB = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!comparing || !compareStartedAt) {
+      setCompareElapsed(0);
+      return;
+    }
+
+    const tick = () => setCompareElapsed(Math.floor((Date.now() - compareStartedAt) / 1000));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [comparing, compareStartedAt]);
 
   // Ctrl+Wheel zoom handler
   useEffect(() => {
@@ -457,7 +472,10 @@ export function CompareTab({
   const runCompare = async () => {
     if (!fileA || !fileB) { setError('원본과 수정본 PDF를 모두 선택해주세요.'); return; }
     const api = (window as any).electronAPI;
-    setCmp(true); setError(null); setRes(null); setVisualPages(null); setCurrentPageIdx(0); setCheckedItems({});
+    setCmp(true);
+    setCompareStartedAt(Date.now());
+    setCompareStage(isVisualMode ? 'PDF 렌더링 준비 중' : 'PDF 업로드 준비 중');
+    setError(null); setRes(null); setVisualPages(null); setCurrentPageIdx(0); setCheckedItems({});
 
     try {
       if (isVisualMode) {
@@ -466,6 +484,7 @@ export function CompareTab({
 
         if (api) {
           // Desktop Electron: we still render via the server
+          setCompareStage('PDF 렌더링 중');
           const formData = new FormData();
           formData.append('fileA', fileA);
           formData.append('fileB', fileB);
@@ -485,6 +504,7 @@ export function CompareTab({
           setVisualPages(pages);
         } else {
           // Web environment
+          setCompareStage('PDF 렌더링 중');
           const formData = new FormData();
           formData.append('fileA', fileA);
           formData.append('fileB', fileB);
@@ -511,6 +531,7 @@ export function CompareTab({
         setShowSidebar(true);
 
         if (api) {
+          setCompareStage('PDF 분석 엔진 실행 중');
           const pathA = api.getPathForFile ? api.getPathForFile(fileA) : (fileA as any).path;
           const pathB = api.getPathForFile ? api.getPathForFile(fileB) : (fileB as any).path;
           const resp = await api.comparePdfs({ fileA: pathA, fileB: pathB, sensitivity: String(precision) });
@@ -520,6 +541,7 @@ export function CompareTab({
             setError(resp.error || '비교 중 오류가 발생했습니다.');
           }
         } else {
+          setCompareStage('PDF 업로드 중');
           const formData = new FormData();
           formData.append('fileA', fileA);
           formData.append('fileB', fileB);
@@ -539,8 +561,14 @@ export function CompareTab({
           if (resp.success && resp.taskId) {
             const taskId = resp.taskId;
             let completed = false;
+            const pollStartedAt = Date.now();
+            const maxWaitMs = 10 * 60 * 1000;
 
             while (!completed) {
+              if (Date.now() - pollStartedAt > maxWaitMs) {
+                throw new Error('비교 시간이 너무 오래 걸려 중단했습니다. 정밀도를 낮춰 다시 시도해 주세요.');
+              }
+              setCompareStage('PDF 구조/텍스트/이미지 차이 분석 중');
               await new Promise((resolve) => setTimeout(resolve, 1500));
               const statusRes = await fetch(`${API_URL}/compare-status/${taskId}`);
               if (!statusRes.ok) {
@@ -570,6 +598,8 @@ export function CompareTab({
       setError(e.message);
     } finally {
       setCmp(false);
+      setCompareStartedAt(null);
+      setCompareStage('');
     }
   };
 
@@ -580,6 +610,8 @@ export function CompareTab({
     setVisualPages(null);
     setError(null);
     setCmp(false);
+    setCompareStartedAt(null);
+    setCompareStage('');
     setCheckedItems({});
     setCurrentPageIdx(0);
     setActiveDiff(null);
@@ -627,6 +659,7 @@ export function CompareTab({
   const showUploadView = !hasData && !comparing;
   const showNoResults = hasAiData && results!.length === 0;
   const showInspection = hasData;
+  const compareElapsedLabel = `${Math.floor(compareElapsed / 60)}:${String(compareElapsed % 60).padStart(2, '0')}`;
 
   return (
     <AnimatePresence mode="wait">
@@ -803,6 +836,46 @@ export function CompareTab({
               </>
             )}
           </button>
+        </motion.div>
+      ) : comparing ? (
+        <motion.div
+          key="compare-loading-view"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          className="w-full max-w-2xl mx-auto mt-14 rounded-2xl border border-gray-200 bg-white p-7 shadow-lg"
+          style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}
+        >
+          <div className="flex items-start gap-4">
+            <div className="relative flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-gray-900 text-white shadow-md">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-base font-black text-gray-900">비교 분석 중</h2>
+                <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[10px] font-bold text-gray-500">
+                  {compareElapsedLabel}
+                </span>
+              </div>
+              <p className="mt-2 text-sm font-semibold text-gray-700">
+                {compareStage || (isVisualMode ? 'PDF 렌더링 중' : 'PDF 구조/텍스트/이미지 차이 분석 중')}
+              </p>
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-gray-100">
+                <motion.div
+                  className="h-full rounded-full bg-gray-900"
+                  initial={{ x: '-100%' }}
+                  animate={{ x: ['-100%', '120%'] }}
+                  transition={{ repeat: Infinity, duration: 1.25, ease: 'easeInOut' }}
+                  style={{ width: '45%' }}
+                />
+              </div>
+              <div className="mt-4 grid grid-cols-3 gap-2 text-[10px] font-bold text-gray-500">
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">업로드</div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">렌더링</div>
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">차이 분석</div>
+              </div>
+            </div>
+          </div>
         </motion.div>
       ) : results && results.length === 0 ? (
         // ═══════════════════════════════════════════════════════════════════════
