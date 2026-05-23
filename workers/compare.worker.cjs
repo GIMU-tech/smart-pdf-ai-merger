@@ -467,8 +467,32 @@ async function run() {
       }
     }
 
-    // Set DPI based on precision: >= 90% gets ultra DPI (300) for high-end rendering
-    const DPI = precision >= 90 ? 300 : 150;
+    // Set DPI based on precision, but cap it for very large/long PDFs.
+    // 100% mode previously forced 300DPI, which can explode memory on long print/artboard PDFs.
+    function getMaxPageAreaPt(pdfDoc) {
+      if (!pdfDoc) return 0;
+      try {
+        let maxArea = 0;
+        for (const page of pdfDoc.getPages()) {
+          const box = page.getCropBox ? page.getCropBox() : page.getMediaBox();
+          const w = Math.max(1, box.width || 0);
+          const h = Math.max(1, box.height || 0);
+          maxArea = Math.max(maxArea, w * h);
+        }
+        return maxArea;
+      } catch (_) {
+        return 0;
+      }
+    }
+
+    const requestedDPI = precision >= 90 ? 300 : 150;
+    const maxRenderPixels = precision >= 90 ? 14000000 : 9000000;
+    const maxPageAreaPt = Math.max(getMaxPageAreaPt(pdfDocA), getMaxPageAreaPt(pdfDocB));
+    let DPI = requestedDPI;
+    if (maxPageAreaPt > 0) {
+      const capped = Math.floor(Math.sqrt((maxRenderPixels * 72 * 72) / maxPageAreaPt));
+      DPI = Math.max(96, Math.min(requestedDPI, capped));
+    }
 
     const R   = 72 / DPI; // px to PDF pt
 
@@ -542,15 +566,13 @@ async function run() {
     const maxPages = Math.max(nativeA.length, nativeB.length);
     const results  = [];
 
-    // Run sequentially to save memory on resource-constrained environments (like Render free tier)
-    // Render PDF A and B concurrently to maximize CPU usage
+    // Render sequentially to avoid memory spikes in 95~100% mode.
+    // Concurrent Ghostscript rendering was fast, but it could crash the worker on long/high-DPI PDFs.
     try {
-      await Promise.all([
-        renderAllPNGs(fileA, path.join(tempDir, 'a%d.png')),
-        renderAllPNGs(fileB, path.join(tempDir, 'b%d.png'))
-      ]);
+      await renderAllPNGs(fileA, path.join(tempDir, 'a%d.png'));
+      await renderAllPNGs(fileB, path.join(tempDir, 'b%d.png'));
     } catch (e) {
-      console.error('[Worker] Error rendering PDFs concurrently:', e);
+      console.error('[Worker] Error rendering PDFs:', e);
     }
 
     for (let p=1; p<=maxPages; p++) {
@@ -666,8 +688,8 @@ async function run() {
           if (nativeCount > 120 || isImageBlank(sourceForBlankCheck)) return [];
 
           const basePixels = sourceForBlankCheck.width * sourceForBlankCheck.height;
-          const maxOcrPixels = 16000000;
-          const preferredDpis = precision >= 90 ? [600, 450, 300] : [450, 300, 220];
+          const maxOcrPixels = precision >= 90 ? 10000000 : 8000000;
+          const preferredDpis = precision >= 90 ? [300, 240, 220] : [450, 300, 220];
           const dpis = preferredDpis.filter(dpi => basePixels * Math.pow(dpi / DPI, 2) <= maxOcrPixels);
           if (!dpis.includes(300)) dpis.push(300);
           if (!dpis.includes(220)) dpis.push(220);
@@ -1492,7 +1514,9 @@ async function run() {
           scaleX: s_x,
           scaleY: s_y,
           offsetX: t_x,
-          offsetY: t_y
+          offsetY: t_y,
+          requestedDPI,
+          effectiveDPI: DPI
         } : null
       });
       try { if(hasA) fs.unlinkSync(pA); } catch(_){}
