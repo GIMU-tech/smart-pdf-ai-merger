@@ -661,7 +661,9 @@ async function run() {
 
         async function recognizeHighResOcrPage(filePath, nativeCount, side, mapBox) {
           const sourceForBlankCheck = side === 'A' ? rawA : imgB;
-          if (nativeCount > 3 || isImageBlank(sourceForBlankCheck)) return [];
+          // Allow OCR even when native text exists because outlined/vector text may coexist.
+          // Only skip OCR on pages already extremely text-dense.
+          if (nativeCount > 120 || isImageBlank(sourceForBlankCheck)) return [];
 
           const basePixels = sourceForBlankCheck.width * sourceForBlankCheck.height;
           const maxOcrPixels = 16000000;
@@ -738,6 +740,27 @@ async function run() {
           h: s_y * box.h
         })));
 
+
+
+        // Remove OCR lines that overlap strongly with native text lines.
+        function dedupeOcrAgainstNative(ocrLines, nativeLines) {
+          return ocrLines.filter(ocr => {
+            for (const nativeLine of nativeLines) {
+              const overlapX = Math.max(0, Math.min(ocr.x + ocr.w, nativeLine.x + nativeLine.w) - Math.max(ocr.x, nativeLine.x));
+              const overlapY = Math.max(0, Math.min(ocr.y + ocr.h, nativeLine.y + nativeLine.h) - Math.max(ocr.y, nativeLine.y));
+              const overlapArea = overlapX * overlapY;
+              const minArea = Math.min(
+                Math.max(1, ocr.w * ocr.h),
+                Math.max(1, nativeLine.w * nativeLine.h)
+              );
+              if (overlapArea / minArea > 0.6) {
+                return false;
+              }
+            }
+            return true;
+          });
+        }
+
         // Legacy low-resolution OCR fallback is kept disabled; OCR now uses high-DPI renderings above.
         if (false && tA.length <= 3 && !isImageBlank(rawA)) {
           const ocr = await getOCRWorker().catch(() => null);
@@ -805,6 +828,9 @@ async function run() {
         // Group individual native text items into logical lines for accurate comparison
         const linesA = groupTextIntoLines(tA);
         const linesB = groupTextIntoLines(tB);
+
+        ocrLinesA.splice(0, ocrLinesA.length, ...dedupeOcrAgainstNative(ocrLinesA, linesA));
+        ocrLinesB.splice(0, ocrLinesB.length, ...dedupeOcrAgainstNative(ocrLinesB, linesB));
 
         const tA_processed = [...linesA, ...ocrLinesA];
         const tB_processed = [...linesB, ...ocrLinesB];
@@ -1123,6 +1149,45 @@ async function run() {
         for (const pair of pairs) {
           const bA = pair.blockA;
           const bB = pair.blockB;
+
+          // Detect whole block movement when internal content is effectively identical.
+          const blockTextSame =
+            compactText(bA.textSummary) === compactText(bB.textSummary);
+
+          const areaA = Math.max(1, bA.bbox.w * bA.bbox.h);
+          const areaB = Math.max(1, bB.bbox.w * bB.bbox.h);
+          const areaRatio = Math.abs(areaA - areaB) / Math.max(areaA, areaB);
+
+          const dx = bB.bbox.x - bA.bbox.x;
+          const dy = bB.bbox.y - bA.bbox.y;
+          const dxPt = dx * R;
+          const dyPt = dy * R;
+
+          if (
+            blockTextSame &&
+            areaRatio < 0.15 &&
+            (Math.abs(dxPt) > 1 || Math.abs(dyPt) > 1)
+          ) {
+            diffs.push({
+              type: 'block_moved',
+              severity: 'medium',
+              desc: `컨텐츠 블록 이동 (가로 ${Math.round(dxPt)}pt, 세로 ${Math.round(dyPt)}pt)`,
+              bbox: {
+                x: bA.bbox.x,
+                y: bA.bbox.y,
+                width: bA.bbox.w,
+                height: bA.bbox.h
+              },
+              moveInfo: {
+                from: bA.bbox,
+                to: bB.bbox,
+                dxPx: dx,
+                dyPx: dy,
+                dxPt,
+                dyPt
+              }
+            });
+          }
 
           // Match text elements inside the block
           const textsA = bA.elements.filter(e => e.type === 'text' || e.type === 'ocr');
