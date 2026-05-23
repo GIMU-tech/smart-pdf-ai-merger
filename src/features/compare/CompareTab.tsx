@@ -568,7 +568,7 @@ export function CompareTab({
 
   const API_URL = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    return window.location.hostname === 'localhost'
+    return ['localhost', '127.0.0.1'].includes(window.location.hostname)
       ? 'http://localhost:8080'
       : (window.location.hostname.includes('vercel.app')
           ? 'https://smart-pdf-ai-merger.onrender.com'
