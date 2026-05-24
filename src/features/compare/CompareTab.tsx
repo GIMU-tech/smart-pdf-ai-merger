@@ -24,9 +24,24 @@ type Diff = {
   };
 };
 
+type ReviewItem = {
+  id: string;
+  category: 'identity' | 'spec' | 'warning' | 'text' | 'drawing' | 'layout';
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  title: string;
+  desc: string;
+  before?: string;
+  after?: string;
+  bbox?: { x: number; y: number; width: number; height: number };
+  relatedDiffs?: number[];
+  confidence?: number;
+};
+
 type PageResult = {
   page: number;
   diffs: Diff[];
+  reviewItems?: ReviewItem[];
+  pageSummary?: string;
   base64A: string;
   base64B: string;
 };
@@ -64,6 +79,22 @@ const META: Record<string, { label: string; color: string; ring: string; bg: str
 };
 
 const meta = (type: string) => META[type] || META.design_changed;
+
+const REVIEW_META: Record<ReviewItem['category'], { label: string; icon: typeof Hash; color: string; bg: string }> = {
+  identity: { label: '식별 정보', icon: Hash, color: 'text-rose-700', bg: 'bg-rose-50 border-rose-100' },
+  spec: { label: '규격/중량', icon: Type, color: 'text-orange-700', bg: 'bg-orange-50 border-orange-100' },
+  warning: { label: '주의 문구', icon: AlertCircle, color: 'text-amber-700', bg: 'bg-amber-50 border-amber-100' },
+  text: { label: '문구', icon: Type, color: 'text-blue-700', bg: 'bg-blue-50 border-blue-100' },
+  drawing: { label: '도면 변경', icon: ImageIcon, color: 'text-purple-700', bg: 'bg-purple-50 border-purple-100' },
+  layout: { label: '레이아웃 참고', icon: MoveVertical, color: 'text-gray-600', bg: 'bg-gray-50 border-gray-200' },
+};
+
+const REVIEW_SEVERITY_LABEL: Record<string, string> = {
+  critical: '필수',
+  high: '중요',
+  medium: '확인',
+  low: '참고',
+};
 
 // ─── Smart Zoom Step Calculator ─────────────────────────────────────────────────
 function getZoomStep(current: number, direction: 'in' | 'out'): number {
@@ -521,6 +552,32 @@ export function CompareTab({
     );
   }, [currentResult, showCritical, showHigh, showMedium, showLow]);
 
+  const reviewItems = useMemo(() => {
+    if (!currentResult) return [];
+    return currentResult.reviewItems && currentResult.reviewItems.length > 0
+      ? currentResult.reviewItems
+      : currentResult.diffs.map((d, i) => ({
+          id: `raw-${currentResult.page}-${i}`,
+          category: d.type.includes('text') || d.type.includes('number') ? 'text' : d.type.includes('shape') || d.type.includes('design') ? 'drawing' : 'layout',
+          severity: d.severity as ReviewItem['severity'],
+          title: d.type,
+          desc: d.desc || d.type,
+          before: d.before,
+          bbox: d.bbox,
+          relatedDiffs: [i],
+          confidence: 0.5
+        } as ReviewItem));
+  }, [currentResult]);
+
+  const filteredReviewItems = useMemo(() => {
+    return reviewItems.filter(item =>
+      (item.severity === 'critical' && showCritical) ||
+      (item.severity === 'high'     && showHigh)     ||
+      (item.severity === 'medium'   && showMedium)   ||
+      (item.severity === 'low'      && showLow)
+    );
+  }, [reviewItems, showCritical, showHigh, showMedium, showLow]);
+
   const goToDiff = (idx: number) => {
     setActiveDiff(idx);
     const diff = filteredDiffs[idx];
@@ -540,9 +597,31 @@ export function CompareTab({
     }
   };
 
+  const goToReviewItem = (item: ReviewItem, reviewIdx: number) => {
+    const rawIdx = item.relatedDiffs?.[0] ?? -1;
+    setActiveDiff(rawIdx >= 0 ? rawIdx : null);
+
+    if (viewMode === 'side') {
+      const paneA = scrollRefA.current;
+      if (!paneA || !item.bbox) return;
+      const imgEl = paneA.querySelector('img');
+      if (!imgEl) return;
+
+      const nat = imgEl.naturalWidth || 800;
+      const scaleFactor = imgEl.clientWidth / nat;
+      const top = item.bbox.y * scaleFactor;
+      paneA.scrollTo({ top: Math.max(0, top - 150), behavior: 'smooth' });
+    }
+  };
+
   const getCheckedKey = (diffIdx: number) => {
     if (!currentResult) return '';
     return `${currentResult.page}_${diffIdx}`;
+  };
+
+  const getReviewCheckedKey = (item: ReviewItem, idx: number) => {
+    if (!currentResult) return '';
+    return `${currentResult.page}_review_${item.id || idx}`;
   };
 
   const toggleChecked = (idx: number) => {
@@ -556,15 +635,15 @@ export function CompareTab({
   };
 
   const completionRate = useMemo(() => {
-    const total = filteredDiffs.length;
+    const total = filteredReviewItems.length || filteredDiffs.length;
     if (total === 0) return 100;
     let checkedCount = 0;
-    filteredDiffs.forEach((_, i) => {
-      const key = getCheckedKey(i);
+    (filteredReviewItems.length ? filteredReviewItems : filteredDiffs).forEach((item: any, i) => {
+      const key = filteredReviewItems.length ? getReviewCheckedKey(item, i) : getCheckedKey(i);
       if (checkedItems[key]) checkedCount++;
     });
     return Math.round((checkedCount / total) * 100);
-  }, [checkedItems, filteredDiffs, currentResult]);
+  }, [checkedItems, filteredDiffs, filteredReviewItems, currentResult]);
 
   const API_URL = useMemo(() => {
     if (typeof window === 'undefined') return '';
@@ -1149,108 +1228,121 @@ export function CompareTab({
               >
                 {showSidebar && (
                   <>
-                    {/* Filter Bar */}
-                    <div className="px-3 py-2.5 border-b border-gray-150 bg-gray-50/70 select-none flex-shrink-0">
-                      <div className="flex items-center gap-1.5 text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                        <Filter className="w-3 h-3 text-gray-400" />
-                        변경 유형 필터
+                    <div className="px-3 py-3 border-b border-gray-150 bg-gray-50/70 select-none flex-shrink-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-1.5 text-[9px] font-black text-gray-400 uppercase tracking-widest">
+                            <Filter className="w-3 h-3 text-gray-400" />
+                            사람 검수 요약
+                          </div>
+                          <p className="mt-1 text-[10px] font-bold text-gray-800 leading-snug">
+                            {currentResult?.pageSummary || '변경 없음'}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 text-[9px] font-bold bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full text-blue-600 font-mono">
+                          검수율 {completionRate}%
+                        </div>
                       </div>
-                      <div className="flex flex-col gap-1.5 bg-white border border-gray-200 rounded-xl p-2.5 shadow-inner">
+                      <div className="mt-2 grid grid-cols-2 gap-1.5">
                         {([
-                          ['critical', showCritical, setShowCritical, 'text-rose-600', Hash, 'Critical (금액/수치)'],
-                          ['high', showHigh, setShowHigh, 'text-orange-500', Type, 'High (텍스트 변경)'],
-                          ['medium', showMedium, setShowMedium, 'text-purple-600', Box, 'Medium (도형 수정)'],
-                          ['low', showLow, setShowLow, 'text-gray-500', MoveVertical, 'Low (미세 위치 오차)'],
-                        ] as const).map(([key, val, setter, color, Icon, label]) => (
-                          <label key={key} className="flex items-center justify-between cursor-pointer select-none group">
-                            <div className="flex items-center gap-2">
-                              <Icon className={cn('w-3 h-3', color)} />
-                              <span className="text-[10px] font-semibold text-gray-700 group-hover:text-gray-900 transition-colors">{label}</span>
-                            </div>
-                            <input 
-                              type="checkbox" 
-                              checked={val} 
+                          ['critical', showCritical, setShowCritical, '필수'],
+                          ['high', showHigh, setShowHigh, '중요'],
+                          ['medium', showMedium, setShowMedium, '확인'],
+                          ['low', showLow, setShowLow, '참고'],
+                        ] as const).map(([key, val, setter, label]) => (
+                          <label key={key} className="flex items-center justify-between cursor-pointer select-none rounded-lg bg-white border border-gray-200 px-2 py-1">
+                            <span className="text-[10px] font-bold text-gray-700">{label}</span>
+                            <input
+                              type="checkbox"
+                              checked={val}
                               onChange={e => { setter(e.target.checked); setActiveDiff(null); }}
-                              className="w-3.5 h-3.5 rounded cursor-pointer accent-gray-900 border-gray-300 focus:ring-0" 
+                              className="w-3.5 h-3.5 rounded cursor-pointer accent-gray-900 border-gray-300 focus:ring-0"
                             />
                           </label>
                         ))}
                       </div>
                     </div>
 
-                    {/* Progress and resets */}
-                    <div className="px-3 py-2 border-b border-gray-200 flex justify-between items-center bg-gray-50 select-none flex-shrink-0">
-                      <span className="text-[9px] font-black tracking-widest text-gray-500 uppercase">변경사항</span>
-                      <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1 text-[9px] font-bold bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full text-blue-600 font-mono">
-                          검수율 {completionRate}%
-                        </div>
-                        {completionRate > 0 && (
-                          <button onClick={resetChecked} className="p-1 hover:bg-gray-200 rounded-lg text-gray-400 hover:text-gray-600 transition-all cursor-pointer" title="검수 초기화">
-                            <RotateCcw className="w-3 h-3" />
-                          </button>
-                        )}
-                      </div>
+                    <div className="px-3 py-2 border-b border-gray-200 flex justify-between items-center bg-white select-none flex-shrink-0">
+                      <span className="text-[9px] font-black tracking-widest text-gray-500 uppercase">
+                        핵심 항목 {filteredReviewItems.length}건
+                      </span>
+                      <button onClick={resetChecked} className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-all cursor-pointer" title="검수 초기화">
+                        <RotateCcw className="w-3 h-3" />
+                      </button>
                     </div>
 
-                    {/* Cards feed */}
-                    <div className="flex-1 overflow-y-auto divide-y divide-gray-100 p-2.5 space-y-1.5 bg-gray-50/50">
-                      {filteredDiffs.length === 0 ? (
+                    <div className="flex-1 overflow-y-auto p-2.5 space-y-2 bg-gray-50/50">
+                      {filteredReviewItems.length === 0 ? (
                         <div className="py-10 px-3 flex flex-col items-center justify-center text-center gap-3 bg-white border border-gray-200 border-dashed rounded-xl">
                           <CheckCircle2 className="w-7 h-7 text-emerald-500" />
                           <div>
-                            <p className="text-[10px] font-black text-gray-800">활성화된 이슈가 없습니다</p>
+                            <p className="text-[10px] font-black text-gray-800">현재 페이지의 핵심 변경이 없습니다</p>
                             <p className="text-[9px] text-gray-400 mt-1 leading-normal">
-                              현재 페이지에서 이 유형의 변경사항이 없거나 검수가 끝난 상태입니다.
+                              필터에 걸린 검수 항목이 없거나 변경이 없는 페이지입니다.
                             </p>
                           </div>
                         </div>
                       ) : (
-                        filteredDiffs.map((d, i) => {
-                          const m = meta(d.type);
-                          const isChecked = !!checkedItems[getCheckedKey(i)];
+                        filteredReviewItems.map((item, i) => {
+                          const m = REVIEW_META[item.category] || REVIEW_META.layout;
+                          const Icon = m.icon;
+                          const rawIdx = item.relatedDiffs?.[0] ?? -1;
+                          const isChecked = !!checkedItems[getReviewCheckedKey(item, i)];
                           return (
-                            <div 
-                              key={i}
+                            <div
+                              key={item.id || i}
                               className={cn(
-                                "group relative w-full text-left rounded-xl p-2.5 border transition-all flex flex-col gap-1.5 cursor-pointer duration-150 shadow-sm",
-                                activeDiff === i 
-                                  ? "bg-blue-50/80 border-blue-300 ring-2 ring-blue-100" 
+                                "group relative w-full text-left rounded-xl p-3 border transition-all flex flex-col gap-2 cursor-pointer duration-150 shadow-sm",
+                                rawIdx >= 0 && activeDiff === rawIdx
+                                  ? "bg-blue-50/80 border-blue-300 ring-2 ring-blue-100"
                                   : "bg-white border-gray-200 hover:border-gray-300 hover:shadow-md",
                                 isChecked && "opacity-45 bg-gray-50 border-gray-150"
                               )}
-                              onClick={() => goToDiff(i)}
+                              onClick={() => goToReviewItem(item, i)}
                             >
-                              <div className="flex items-center justify-between">
-                                <span className={cn('text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full', m.color)} style={{ backgroundColor: `${m.ring}18`, color: m.ring }}>
-                                  {m.label}
-                                </span>
-                                <button 
-                                  onClick={(e) => { e.stopPropagation(); toggleChecked(i); }}
-                                  className="p-0.5 hover:bg-gray-150 rounded-lg transition-all text-gray-400 hover:text-gray-700 cursor-pointer"
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className={cn("w-7 h-7 rounded-lg border flex items-center justify-center flex-shrink-0", m.bg)}>
+                                    <Icon className={cn("w-3.5 h-3.5", m.color)} />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className={cn("text-[8px] font-black px-1.5 py-0.5 rounded-full border", m.bg, m.color)}>
+                                        {REVIEW_SEVERITY_LABEL[item.severity] || item.severity}
+                                      </span>
+                                      <span className="text-[8px] font-bold text-gray-400">{m.label}</span>
+                                    </div>
+                                    <p className="text-[11px] text-gray-900 font-black leading-snug mt-1">{item.title}</p>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const key = getReviewCheckedKey(item, i);
+                                    setCheckedItems(prev => ({ ...prev, [key]: !prev[key] }));
+                                  }}
+                                  className="p-0.5 hover:bg-gray-100 rounded-lg transition-all text-gray-400 hover:text-gray-700 cursor-pointer"
                                 >
-                                  {isChecked ? (
-                                    <CheckSquare className="w-3.5 h-3.5 text-emerald-500" />
-                                  ) : (
-                                    <Square className="w-3.5 h-3.5 text-gray-400 group-hover:text-gray-555" />
-                                  )}
+                                  {isChecked ? <CheckSquare className="w-3.5 h-3.5 text-emerald-500" /> : <Square className="w-3.5 h-3.5 text-gray-400" />}
                                 </button>
                               </div>
-                              
-                              <p className="text-[10px] text-gray-800 font-bold leading-relaxed break-words">
-                                {d.desc || d.type}
+
+                              <p className="text-[10px] text-gray-700 font-semibold leading-relaxed break-words">
+                                {item.desc}
                               </p>
 
-                              {d.textInfo ? (
-                                <div className="bg-gray-50 rounded-lg p-1.5 border border-gray-150 text-[9px] leading-relaxed text-gray-750 font-sans shadow-inner">
-                                  {renderInlineDiff(d.textInfo.diffs)}
+                              {(item.before || item.after) && (
+                                <div className="grid gap-1 text-[9px] font-mono">
+                                  {item.before && <div className="bg-rose-50 border border-rose-100 text-rose-700 rounded px-2 py-1 truncate">Before: {item.before}</div>}
+                                  {item.after && <div className="bg-emerald-50 border border-emerald-100 text-emerald-700 rounded px-2 py-1 truncate">After: {item.after}</div>}
                                 </div>
-                              ) : (
-                                d.before && (
-                                  <div className="text-[9px] text-gray-500 bg-gray-100/50 px-2 py-1 rounded font-mono truncate border border-gray-200/40">
-                                    {d.before}
-                                  </div>
-                                )
+                              )}
+
+                              {!!item.relatedDiffs?.length && (
+                                <div className="text-[8px] text-gray-400 font-bold">
+                                  세부 감지 {item.relatedDiffs.length}건 묶음
+                                </div>
                               )}
                             </div>
                           );

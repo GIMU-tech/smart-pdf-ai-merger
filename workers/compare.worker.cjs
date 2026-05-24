@@ -58,6 +58,186 @@ function postProcess(raw) {
     .trim();
 }
 
+function unionBbox(items) {
+  const boxes = items.map(item => item.bbox).filter(Boolean);
+  if (!boxes.length) return { x: 0, y: 0, width: 1, height: 1 };
+  const minX = Math.min(...boxes.map(b => b.x));
+  const minY = Math.min(...boxes.map(b => b.y));
+  const maxX = Math.max(...boxes.map(b => b.x + b.width));
+  const maxY = Math.max(...boxes.map(b => b.y + b.height));
+  return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+}
+
+function reviewCategoryForText(before, after) {
+  const text = `${before || ''} ${after || ''}`;
+  const compact = compactText(text);
+  if (/LE\d{4,}|RY\d{4,}|L\d{3,}|\d{7,}/i.test(compact)) return {
+    category: 'identity',
+    severity: 'critical',
+    title: '제품 코드/모델명 변경',
+  };
+  if (/(N\.?W|G\.?W|KG|KGS|MM|CM|\d+[X*]\d+|\b350\b|\b600\b)/i.test(compact)) return {
+    category: 'spec',
+    severity: 'critical',
+    title: '규격/치수/중량 변경',
+  };
+  if (/(주의|경고|반품|교환|조립|반드시|확인|WARNING|CAUTION)/i.test(text)) return {
+    category: 'warning',
+    severity: 'high',
+    title: '주의/안내 문구 변경',
+  };
+  return {
+    category: 'text',
+    severity: 'high',
+    title: '문구 변경',
+  };
+}
+
+function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
+  const reviewItems = [];
+  let id = 1;
+  const addItem = (item) => {
+    reviewItems.push({
+      id: `p${page}-r${id++}`,
+      confidence: item.confidence ?? 0.75,
+      relatedDiffs: item.relatedDiffs || [],
+      ...item
+    });
+  };
+
+  const textGroups = new Map();
+  const cleanCandidate = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const joinCandidates = (values) => [...new Set(values.map(cleanCandidate).filter(Boolean))]
+    .slice(0, 6)
+    .join(' / ');
+
+  diffs.forEach((diff, idx) => {
+    if (!diff.textInfo) return;
+    const before = diff.textInfo.beforeStr || diff.before || '';
+    const after = diff.textInfo.afterStr || '';
+    const info = reviewCategoryForText(before, after);
+    const key = `${info.category}:${info.title}`;
+    if (!textGroups.has(key)) {
+      textGroups.set(key, {
+        ...info,
+        beforeValues: [],
+        afterValues: [],
+        boxes: [],
+        relatedDiffs: [],
+        confidence: diff.type === 'number_changed' ? 0.92 : 0.82
+      });
+    }
+    const group = textGroups.get(key);
+    if (before) group.beforeValues.push(before);
+    if (after) group.afterValues.push(after);
+    if (diff.bbox) group.boxes.push({ bbox: diff.bbox });
+    group.relatedDiffs.push(idx);
+    group.confidence = Math.max(group.confidence, diff.type === 'number_changed' ? 0.92 : 0.82);
+  });
+
+  for (const group of textGroups.values()) {
+    const before = joinCandidates(group.beforeValues);
+    const after = joinCandidates(group.afterValues);
+    const desc = before && after
+      ? `${group.title} 후보가 변경되었습니다.`
+      : (after ? `새 ${group.title} 후보가 추가되었습니다.` : `${group.title} 후보가 삭제되었습니다.`);
+
+    addItem({
+      category: group.category,
+      severity: group.severity,
+      title: group.title,
+      before,
+      after,
+      desc,
+      bbox: unionBbox(group.boxes),
+      relatedDiffs: group.relatedDiffs,
+      confidence: group.confidence
+    });
+  }
+
+  const visualDiffs = diffs
+    .map((diff, idx) => ({ diff, idx }))
+    .filter(({ diff }) => ['layout_changed', 'shape_resized', 'shape_modified', 'design_changed'].includes(diff.type));
+  const movedDiffs = diffs
+    .map((diff, idx) => ({ diff, idx }))
+    .filter(({ diff }) => diff.type === 'block_moved');
+  const spacingDiffs = diffs
+    .map((diff, idx) => ({ diff, idx }))
+    .filter(({ diff }) => diff.type === 'spacing_changed');
+
+  if (visualDiffs.length >= 3) {
+    const relatedDiffs = visualDiffs.map(x => x.idx);
+    const bbox = unionBbox(visualDiffs.map(x => x.diff));
+    addItem({
+      category: 'drawing',
+      severity: visualDiffs.length >= 12 ? 'high' : 'medium',
+      title: '도면/일러스트 변경',
+      desc: `도면, 제품 그림, 구성품 그림 등 시각 요소 변경 후보 ${visualDiffs.length}건을 하나로 묶었습니다.`,
+      bbox,
+      relatedDiffs,
+      confidence: 0.78
+    });
+  } else {
+    visualDiffs.forEach(({ diff, idx }) => addItem({
+      category: 'drawing',
+      severity: diff.severity === 'high' ? 'medium' : 'low',
+      title: diff.type === 'shape_resized' ? '도형 크기 변경' : '도형/이미지 변경',
+      desc: diff.desc || '시각 요소 변경 후보입니다.',
+      bbox: diff.bbox,
+      relatedDiffs: [idx],
+      confidence: 0.62
+    }));
+  }
+
+  if (movedDiffs.length) {
+    const relatedDiffs = movedDiffs.map(x => x.idx);
+    const bbox = unionBbox(movedDiffs.map(x => x.diff));
+    addItem({
+      category: 'layout',
+      severity: 'low',
+      title: '블록 위치 이동',
+      desc: `같거나 유사한 컨텐츠 블록 위치 이동 ${movedDiffs.length}건입니다. 제품 규격 차이로 인한 정상 변경일 수 있습니다.`,
+      bbox,
+      relatedDiffs,
+      confidence: 0.68
+    });
+  }
+
+  if (spacingDiffs.length || (normalization && (Math.abs(normalization.offsetX || 0) > 2 || Math.abs(normalization.offsetY || 0) > 2))) {
+    const relatedDiffs = spacingDiffs.map(x => x.idx);
+    const bbox = spacingDiffs.length ? unionBbox(spacingDiffs.map(x => x.diff)) : { x: 0, y: 0, width: pageSize.width, height: 24 };
+    addItem({
+      category: 'layout',
+      severity: 'low',
+      title: '페이지/대지 위치 이동',
+      desc: '전체 대지 또는 주요 컨텐츠가 기준 위치에서 이동했습니다. 세부 도형 차이는 참고용으로 접어두는 것이 좋습니다.',
+      bbox,
+      relatedDiffs,
+      confidence: 0.7
+    });
+  }
+
+  const priority = { critical: 0, high: 1, medium: 2, low: 3 };
+  reviewItems.sort((a, b) => (priority[a.severity] ?? 9) - (priority[b.severity] ?? 9));
+
+  const counts = reviewItems.reduce((acc, item) => {
+    acc[item.category] = (acc[item.category] || 0) + 1;
+    return acc;
+  }, {});
+  const pageSummary = reviewItems.length === 0
+    ? '변경 없음'
+    : [
+        counts.identity ? '제품 식별 정보' : '',
+        counts.spec ? '규격/치수/중량' : '',
+        counts.warning ? '주의 문구' : '',
+        counts.text ? '문구' : '',
+        counts.drawing ? '도면/일러스트' : '',
+        counts.layout ? '레이아웃 참고' : ''
+      ].filter(Boolean).join(', ') + ' 변경';
+
+  return { reviewItems, pageSummary };
+}
+
 // Crop png region using raw buffer (no bitblt)
 function cropRegion(png, x, y, w, h) {
   x = Math.max(0, x); y = Math.max(0, y);
@@ -689,10 +869,75 @@ async function run() {
 
           const basePixels = sourceForBlankCheck.width * sourceForBlankCheck.height;
           const maxOcrPixels = precision >= 90 ? 10000000 : 8000000;
-          const preferredDpis = precision >= 90 ? [300, 240, 220] : [450, 300, 220];
-          const dpis = preferredDpis.filter(dpi => basePixels * Math.pow(dpi / DPI, 2) <= maxOcrPixels);
-          if (!dpis.includes(300)) dpis.push(300);
-          if (!dpis.includes(220)) dpis.push(220);
+          const preferredDpis = precision >= 90 ? [300, 240, 220, 180, 150] : [300, 220, 180, 150, 120];
+          const dpis = [...new Set(preferredDpis)];
+
+          async function ocrImagePath(imagePath, scaleToBase, offsetX = 0, offsetY = 0) {
+            const ocr = await getOCRWorker().catch(() => null);
+            if (!ocr) return [];
+
+            await ocr.setParameters({
+              tessedit_pageseg_mode: PSM.AUTO,
+              preserve_interword_spaces: '1'
+            }).catch(() => {});
+
+            const { data } = await ocr.recognize(imagePath, {}, { blocks: true });
+            const lines = [];
+            if (!data || !data.blocks) return lines;
+
+            for (const block of data.blocks) {
+              if (!block.paragraphs) continue;
+              for (const para of block.paragraphs) {
+                if (!para.lines) continue;
+                for (const line of para.lines) {
+                  const text = postProcess(line.text || '');
+                  if (line.confidence < M.ocrConf || text.trim().length === 0) continue;
+                  const baseBox = {
+                    x: (line.bbox.x0 + offsetX) * scaleToBase,
+                    y: (line.bbox.y0 + offsetY) * scaleToBase,
+                    w: (line.bbox.x1 - line.bbox.x0) * scaleToBase,
+                    h: (line.bbox.y1 - line.bbox.y0) * scaleToBase
+                  };
+                  lines.push({ str: text, ...mapBox(baseBox) });
+                }
+              }
+            }
+            return lines;
+          }
+
+          async function ocrTopBandTiles(probe, outPath, ocrDpi, scaleToBase) {
+            const tileSize = Math.min(2800, Math.floor(Math.sqrt(maxOcrPixels * 0.72)));
+            const topBandHeight = Math.min(probe.height, tileSize, Math.ceil(probe.height * 0.28));
+            const xTiles = Math.ceil(probe.width / tileSize);
+            const yTiles = Math.ceil(topBandHeight / tileSize);
+
+            // Keep this as a targeted rescue path, not a full-page OCR explosion.
+            // The first screen band carries product codes/spec headlines in most print PDFs.
+            if (xTiles * yTiles > 5) {
+              throw new Error(`OCR image too large at ${ocrDpi} DPI (${probe.width}x${probe.height}); top-band tiles would be ${xTiles * yTiles}`);
+            }
+
+            const lines = [];
+            for (let ty = 0; ty < yTiles; ty++) {
+              for (let tx = 0; tx < xTiles; tx++) {
+                const x = tx * tileSize;
+                const y = ty * tileSize;
+                const w = Math.min(tileSize, probe.width - x);
+                const h = Math.min(tileSize, topBandHeight - y);
+                if (w <= 0 || h <= 0) continue;
+
+                const tile = cropRegion(probe, x, y, w, h);
+                const tilePath = path.join(tempDir, `ocr_${side}${p}_${ocrDpi}_${tx}_${ty}.png`);
+                try {
+                  fs.writeFileSync(tilePath, PNG.sync.write(tile, { deflateLevel: 1 }));
+                  lines.push(...await ocrImagePath(tilePath, scaleToBase, x, y));
+                } finally {
+                  try { fs.unlinkSync(tilePath); } catch (_) {}
+                }
+              }
+            }
+            return lines;
+          }
 
           for (const ocrDpi of dpis) {
             const scaleToBase = DPI / ocrDpi;
@@ -706,43 +951,20 @@ async function run() {
                 throw new Error(`OCR render produced an empty image at ${ocrDpi} DPI`);
               }
 
-              // Validate the PNG before handing it to Tesseract. This avoids a worker-level crash
-              // on corrupt or oversized render outputs.
+              // Validate the PNG before handing it to Tesseract. Oversized pages are handled
+              // with top-band tiles so product codes/specs can still be found without OCRing
+              // the whole artboard at once.
               const probe = PNG.sync.read(fs.readFileSync(outPath));
-              if (!probe.width || !probe.height || probe.width * probe.height > maxOcrPixels) {
+              if (!probe.width || !probe.height) {
+                throw new Error(`OCR render produced invalid dimensions at ${ocrDpi} DPI`);
+              }
+              if (probe.width * probe.height > maxOcrPixels) {
+                const tiledLines = await ocrTopBandTiles(probe, outPath, ocrDpi, scaleToBase);
+                if (tiledLines.length > 0) return tiledLines;
                 throw new Error(`OCR image too large at ${ocrDpi} DPI (${probe.width}x${probe.height})`);
               }
 
-              const ocr = await getOCRWorker().catch(() => null);
-              if (!ocr) return [];
-
-              await ocr.setParameters({
-                tessedit_pageseg_mode: PSM.AUTO,
-                preserve_interword_spaces: '1'
-              }).catch(() => {});
-
-              const { data } = await ocr.recognize(outPath, {}, { blocks: true });
-              const lines = [];
-              if (data && data.blocks) {
-                for (const block of data.blocks) {
-                  if (!block.paragraphs) continue;
-                  for (const para of block.paragraphs) {
-                    if (!para.lines) continue;
-                    for (const line of para.lines) {
-                      const text = postProcess(line.text || '');
-                      if (line.confidence < M.ocrConf || text.trim().length === 0) continue;
-                      const baseBox = {
-                        x: line.bbox.x0 * scaleToBase,
-                        y: line.bbox.y0 * scaleToBase,
-                        w: (line.bbox.x1 - line.bbox.x0) * scaleToBase,
-                        h: (line.bbox.y1 - line.bbox.y0) * scaleToBase
-                      };
-                      lines.push({ str: text, ...mapBox(baseBox) });
-                    }
-                  }
-                }
-              }
-              return lines;
+              return await ocrImagePath(outPath, scaleToBase);
             } catch (err) {
               console.error(`[Worker] high-res OCR ${side} failed at ${ocrDpi} DPI:`, err);
               await resetOCRWorker();
@@ -1501,23 +1723,32 @@ async function run() {
         if (imgB && origDataB) imgB.data.set(origDataB);
         base64B = imgB ? PNG.sync.write(imgB, { deflateLevel: 1 }).toString('base64') : fs.readFileSync(pB).toString('base64');
       }
+      const normalization = (hasA && hasB) ? {
+        boxesA,
+        boxesB,
+        contentBoxA,
+        contentBoxB,
+        scaleX: s_x,
+        scaleY: s_y,
+        offsetX: t_x,
+        offsetY: t_y,
+        requestedDPI,
+        effectiveDPI: DPI
+      } : null;
+      const humanReview = buildHumanReviewSummary(
+        p,
+        diffs,
+        { width: imgA?.width || imgB?.width || 1, height: imgA?.height || imgB?.height || 1 },
+        normalization
+      );
       results.push({
         page: p,
         diffs,
+        reviewItems: humanReview.reviewItems,
+        pageSummary: humanReview.pageSummary,
         base64A,
         base64B,
-        normalization: (hasA && hasB) ? {
-          boxesA,
-          boxesB,
-          contentBoxA,
-          contentBoxB,
-          scaleX: s_x,
-          scaleY: s_y,
-          offsetX: t_x,
-          offsetY: t_y,
-          requestedDPI,
-          effectiveDPI: DPI
-        } : null
+        normalization
       });
       try { if(hasA) fs.unlinkSync(pA); } catch(_){}
       try { if(hasB) fs.unlinkSync(pB); } catch(_){}
