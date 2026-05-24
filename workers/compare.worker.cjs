@@ -93,8 +93,95 @@ function reviewCategoryForText(before, after) {
   };
 }
 
+function bboxToRect(bbox) {
+  if (!bbox) return { x: 0, y: 0, w: 1, h: 1 };
+  return {
+    x: bbox.x || 0,
+    y: bbox.y || 0,
+    w: bbox.width || bbox.w || 1,
+    h: bbox.height || bbox.h || 1
+  };
+}
+
+function rectArea(rect) {
+  return Math.max(1, rect.w) * Math.max(1, rect.h);
+}
+
+function unionRect(a, b) {
+  const x1 = Math.min(a.x, b.x);
+  const y1 = Math.min(a.y, b.y);
+  const x2 = Math.max(a.x + a.w, b.x + b.w);
+  const y2 = Math.max(a.y + a.h, b.y + b.h);
+  return { x: x1, y: y1, w: Math.max(1, x2 - x1), h: Math.max(1, y2 - y1) };
+}
+
+function rectToBbox(rect) {
+  return { x: rect.x, y: rect.y, width: rect.w, height: rect.h };
+}
+
+function rectGap(a, b) {
+  const dx = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w));
+  const dy = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.h, b.y + b.h));
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function rectOverlapRatio(a, b) {
+  const x1 = Math.max(a.x, b.x);
+  const y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w);
+  const y2 = Math.min(a.y + a.h, b.y + b.h);
+  const overlap = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  return overlap / Math.max(1, Math.min(rectArea(a), rectArea(b)));
+}
+
+function clusterDiffsByRegion(items, pageSize, options = {}) {
+  const maxGap = options.maxGap ?? Math.max(36, Math.min(pageSize.width, pageSize.height) * 0.035);
+  const maxClusterAreaRatio = options.maxClusterAreaRatio ?? 0.18;
+  const maxClusterWidthRatio = options.maxClusterWidthRatio ?? 0.7;
+  const maxClusterHeightRatio = options.maxClusterHeightRatio ?? 0.34;
+
+  const seeds = items
+    .map(item => ({ ...item, rect: bboxToRect(item.diff.bbox) }))
+    .filter(item => rectArea(item.rect) >= (options.minArea ?? 80));
+
+  const clusters = [];
+  for (const seed of seeds) {
+    let best = null;
+    let bestGap = Infinity;
+    for (const cluster of clusters) {
+      const gap = rectGap(cluster.rect, seed.rect);
+      const merged = unionRect(cluster.rect, seed.rect);
+      const tooWide = merged.w > pageSize.width * maxClusterWidthRatio;
+      const tooTall = merged.h > pageSize.height * maxClusterHeightRatio;
+      const tooLarge = rectArea(merged) > pageSize.width * pageSize.height * maxClusterAreaRatio;
+      if (gap <= maxGap && !tooWide && !tooTall && !tooLarge && gap < bestGap) {
+        best = cluster;
+        bestGap = gap;
+      }
+    }
+
+    if (!best) {
+      clusters.push({ rect: seed.rect, items: [seed] });
+    } else {
+      best.rect = unionRect(best.rect, seed.rect);
+      best.items.push(seed);
+    }
+  }
+
+  // If many small regions line up in separate instruction panels, keep them as
+  // separate review targets instead of melting the entire row into one card.
+  return clusters
+    .map(cluster => ({
+      ...cluster,
+      rect: rectToBbox(cluster.rect),
+      score: cluster.items.length * 10000 + rectArea(cluster.rect)
+    }))
+    .sort((a, b) => b.score - a.score);
+}
+
 function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
   const reviewItems = [];
+  const textReviewBoxes = [];
   let id = 1;
   const addItem = (item) => {
     reviewItems.push({
@@ -153,6 +240,7 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
       relatedDiffs: group.relatedDiffs,
       confidence: group.confidence
     });
+    textReviewBoxes.push(bboxToRect(unionBbox(group.boxes)));
   }
 
   const visualDiffs = diffs
@@ -166,17 +254,48 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
     .filter(({ diff }) => diff.type === 'spacing_changed');
 
   if (visualDiffs.length >= 3) {
-    const relatedDiffs = visualDiffs.map(x => x.idx);
-    const bbox = unionBbox(visualDiffs.map(x => x.diff));
-    addItem({
-      category: 'drawing',
-      severity: visualDiffs.length >= 12 ? 'high' : 'medium',
-      title: '도면/일러스트 변경',
-      desc: `도면, 제품 그림, 구성품 그림 등 시각 요소 변경 후보 ${visualDiffs.length}건을 하나로 묶었습니다.`,
-      bbox,
-      relatedDiffs,
-      confidence: 0.78
+    const allVisualClusters = clusterDiffsByRegion(visualDiffs, pageSize)
+      .filter(cluster => cluster.items.length >= 2 || rectArea(bboxToRect(cluster.rect)) > 900);
+    const visualClusters = allVisualClusters
+      .filter(cluster => {
+        const rect = bboxToRect(cluster.rect);
+        return !textReviewBoxes.some(textRect => rectOverlapRatio(rect, textRect) > 0.45);
+      })
+      .sort((a, b) => {
+        const ar = bboxToRect(a.rect);
+        const br = bboxToRect(b.rect);
+        return (b.items.length * 10000 + Math.min(rectArea(br), pageSize.width * pageSize.height * 0.08)) -
+               (a.items.length * 10000 + Math.min(rectArea(ar), pageSize.width * pageSize.height * 0.08));
+      });
+    const primaryVisualClusters = visualClusters.slice(0, 6);
+    const remainingVisualClusters = visualClusters.slice(6);
+
+    primaryVisualClusters.forEach((cluster, clusterIdx) => {
+      const relatedDiffs = cluster.items.map(x => x.idx);
+      const itemCount = relatedDiffs.length;
+      addItem({
+        category: 'drawing',
+        severity: itemCount >= 8 ? 'high' : 'medium',
+        title: primaryVisualClusters.length === 1 ? '도면/일러스트 변경' : `도면/일러스트 변경 영역 ${clusterIdx + 1}`,
+        desc: `가까운 시각 요소 변경 후보 ${itemCount}건을 하나의 검수 영역으로 묶었습니다.`,
+        bbox: cluster.rect,
+        relatedDiffs,
+        confidence: 0.78
+      });
     });
+
+    if (remainingVisualClusters.length) {
+      const relatedDiffs = remainingVisualClusters.flatMap(cluster => cluster.items.map(x => x.idx));
+      addItem({
+        category: 'drawing',
+        severity: 'low',
+        title: '추가 시각 변경 후보',
+        desc: `작거나 반복적인 시각 변경 후보 ${relatedDiffs.length}건은 참고 묶음으로 낮췄습니다.`,
+        bbox: unionBbox(remainingVisualClusters.map(cluster => ({ bbox: cluster.rect }))),
+        relatedDiffs,
+        confidence: 0.58
+      });
+    }
   } else {
     visualDiffs.forEach(({ diff, idx }) => addItem({
       category: 'drawing',
