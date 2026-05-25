@@ -13,6 +13,7 @@ import { cn } from '../../lib/utils';
 // ─── Types ─────────────────────────────────────────────────────────────────────
 type Diff = {
   type: string;
+  rawIndex?: number;
   severity: string;
   desc?: string;
   before?: string;
@@ -235,7 +236,7 @@ function DiffBox({ diff, scale, active, onHover, checked }: {
       )}
 
       {active && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 z-50 bg-gray-950/95 backdrop-blur-md border border-gray-800 text-white rounded-xl shadow-2xl p-3 w-80 flex flex-col gap-2 pointer-events-none select-none animate-in fade-in slide-in-from-bottom-2 duration-150">
+        <div className="absolute top-full left-0 mt-3 z-50 bg-gray-950/95 backdrop-blur-md border border-gray-800 text-white rounded-xl shadow-2xl p-3 w-80 max-w-[80vw] flex flex-col gap-2 pointer-events-none select-none animate-in fade-in slide-in-from-top-2 duration-150">
           <div className="flex items-center justify-between border-b border-gray-800/80 pb-2">
             <span className={cn('text-[9px] font-black px-2 py-0.5 rounded tracking-wide uppercase', m.color)} style={{ backgroundColor: `${m.ring}20`, color: m.ring }}>
               {m.label}
@@ -345,9 +346,9 @@ function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, inn
               key={i}
               diff={d}
               scale={scale}
-              active={hover === i || activeDiff === i}
-              onHover={(v) => setHover(v ? i : null)}
-              checked={!!checkedItems[i]}
+              active={hover === (d.rawIndex ?? i) || activeDiff === (d.rawIndex ?? i)}
+              onHover={(v) => setHover(v ? (d.rawIndex ?? i) : null)}
+              checked={!!checkedItems[d.rawIndex ?? i]}
             />
           ))}
         </div>
@@ -507,6 +508,8 @@ export function CompareTab({
   const [compareMode, setCompareMode] = useState<CompareMode>('ai');
   const [precision, setPrecision] = useState(80);
   const [showSidebar, setShowSidebar] = useState(true);
+  const [showAllDiffOverlays, setShowAllDiffOverlays] = useState(false);
+  const [hideCheckedReviewItems, setHideCheckedReviewItems] = useState(true);
   const [blendMode, setBlendMode] = useState<'difference' | 'normal'>('difference');
 
   // Visual-only pages (for 육안 검수 mode)
@@ -636,7 +639,7 @@ export function CompareTab({
         } as ReviewItem));
   }, [currentResult]);
 
-  const filteredReviewItems = useMemo(() => {
+  const severityFilteredReviewItems = useMemo(() => {
     return reviewItems.filter(item =>
       (item.severity === 'critical' && showCritical) ||
       (item.severity === 'high'     && showHigh)     ||
@@ -644,6 +647,34 @@ export function CompareTab({
       (item.severity === 'low'      && showLow)
     );
   }, [reviewItems, showCritical, showHigh, showMedium, showLow]);
+
+  const filteredReviewItems = useMemo(() => {
+    if (!hideCheckedReviewItems) return severityFilteredReviewItems;
+    return severityFilteredReviewItems.filter((item, i) => !checkedItems[getReviewCheckedKey(item, i)]);
+  }, [severityFilteredReviewItems, hideCheckedReviewItems, checkedItems, currentResult]);
+
+  const overlayDiffs = useMemo(() => {
+    if (!currentResult) return [];
+    const include = new Set<number>();
+
+    if (!showAllDiffOverlays) {
+      if (activeDiff != null && currentResult.diffs[activeDiff]) include.add(activeDiff);
+    } else if (severityFilteredReviewItems.length > 0) {
+      const sourceItems = hideCheckedReviewItems ? filteredReviewItems : severityFilteredReviewItems;
+      sourceItems.forEach(item => item.relatedDiffs?.forEach(idx => include.add(idx)));
+    } else {
+      currentResult.diffs.forEach((d, idx) => {
+        if ((d.severity === 'critical' && showCritical) ||
+            (d.severity === 'high' && showHigh) ||
+            (d.severity === 'medium' && showMedium) ||
+            (d.severity === 'low' && showLow)) include.add(idx);
+      });
+    }
+
+    return [...include]
+      .filter(idx => currentResult.diffs[idx])
+      .map(idx => ({ ...currentResult.diffs[idx], rawIndex: idx }));
+  }, [currentResult, activeDiff, showAllDiffOverlays, severityFilteredReviewItems, filteredReviewItems, hideCheckedReviewItems, showCritical, showHigh, showMedium, showLow]);
 
   const goToDiff = (idx: number) => {
     setActiveDiff(idx);
@@ -681,15 +712,15 @@ export function CompareTab({
     }
   };
 
-  const getCheckedKey = (diffIdx: number) => {
+  function getCheckedKey(diffIdx: number) {
     if (!currentResult) return '';
     return `${currentResult.page}_${diffIdx}`;
-  };
+  }
 
-  const getReviewCheckedKey = (item: ReviewItem, idx: number) => {
+  function getReviewCheckedKey(item: ReviewItem, idx: number) {
     if (!currentResult) return '';
     return `${currentResult.page}_review_${item.id || idx}`;
-  };
+  }
 
   const toggleChecked = (idx: number) => {
     const key = getCheckedKey(idx);
@@ -702,15 +733,20 @@ export function CompareTab({
   };
 
   const completionRate = useMemo(() => {
-    const total = filteredReviewItems.length || filteredDiffs.length;
+    const total = severityFilteredReviewItems.length || filteredDiffs.length;
     if (total === 0) return 100;
     let checkedCount = 0;
-    (filteredReviewItems.length ? filteredReviewItems : filteredDiffs).forEach((item: any, i) => {
-      const key = filteredReviewItems.length ? getReviewCheckedKey(item, i) : getCheckedKey(i);
-      if (checkedItems[key]) checkedCount++;
-    });
+    if (severityFilteredReviewItems.length) {
+      severityFilteredReviewItems.forEach((item, i) => {
+        if (checkedItems[getReviewCheckedKey(item, i)]) checkedCount++;
+      });
+    } else {
+      filteredDiffs.forEach((_, i) => {
+        if (checkedItems[getCheckedKey(i)]) checkedCount++;
+      });
+    }
     return Math.round((checkedCount / total) * 100);
-  }, [checkedItems, filteredDiffs, filteredReviewItems, currentResult]);
+  }, [checkedItems, filteredDiffs, severityFilteredReviewItems, currentResult]);
 
   const API_URL = useMemo(() => {
     if (typeof window === 'undefined') return '';
@@ -1330,13 +1366,35 @@ export function CompareTab({
                       </div>
                     </div>
 
-                    <div className="px-3 py-2 border-b border-gray-200 flex justify-between items-center bg-white select-none flex-shrink-0">
-                      <span className="text-[9px] font-black tracking-widest text-gray-500 uppercase">
-                        핵심 항목 {filteredReviewItems.length}건
-                      </span>
-                      <button onClick={resetChecked} className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-all cursor-pointer" title="검수 초기화">
-                        <RotateCcw className="w-3 h-3" />
-                      </button>
+                                        <div className="px-3 py-2 border-b border-gray-200 bg-white select-none flex-shrink-0 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[9px] font-black tracking-widest text-gray-500 uppercase">
+                          ?? ?? {filteredReviewItems.length}?
+                        </span>
+                        <button onClick={resetChecked} className="p-1 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-all cursor-pointer" title="?? ???">
+                          <RotateCcw className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          onClick={() => setShowAllDiffOverlays(v => !v)}
+                          className={cn(
+                            "rounded-lg border px-2 py-1 text-[9px] font-black transition-all cursor-pointer",
+                            showAllDiffOverlays ? "bg-gray-900 text-white border-gray-900" : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
+                          )}
+                        >
+                          {showAllDiffOverlays ? '?? ?? ?' : '??? ??'}
+                        </button>
+                        <button
+                          onClick={() => setHideCheckedReviewItems(v => !v)}
+                          className={cn(
+                            "rounded-lg border px-2 py-1 text-[9px] font-black transition-all cursor-pointer",
+                            hideCheckedReviewItems ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
+                          )}
+                        >
+                          {hideCheckedReviewItems ? '?? ??' : '?? ??'}
+                        </button>
+                      </div>
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-2.5 space-y-2 bg-gray-50/50">
@@ -1388,6 +1446,7 @@ export function CompareTab({
                                     e.stopPropagation();
                                     const key = getReviewCheckedKey(item, i);
                                     setCheckedItems(prev => ({ ...prev, [key]: !prev[key] }));
+                                    if (rawIdx >= 0 && activeDiff === rawIdx) setActiveDiff(null);
                                   }}
                                   className="p-0.5 hover:bg-gray-100 rounded-lg transition-all text-gray-400 hover:text-gray-700 cursor-pointer"
                                 >
@@ -1457,7 +1516,7 @@ export function CompareTab({
                     innerRef={scrollRefA}
                     onScroll={handleScrollA}
                     imgSrc={isVisualMode ? (currentVisualPage?.imgA || '') : (currentResult?.base64A || '')}
-                    diffs={isVisualMode ? [] : filteredDiffs}
+                    diffs={isVisualMode ? [] : overlayDiffs}
                     label="BEFORE — 원본"
                     activeDiff={isVisualMode ? null : activeDiff}
                     checkedItems={checkedItems}
@@ -1484,7 +1543,7 @@ export function CompareTab({
                     innerRef={scrollRefB}
                     onScroll={handleScrollB}
                     imgSrc={isVisualMode ? (currentVisualPage?.imgB || '') : (currentResult?.base64B || '')}
-                    diffs={isVisualMode ? [] : filteredDiffs}
+                    diffs={isVisualMode ? [] : overlayDiffs}
                     label="AFTER — 수정본"
                     activeDiff={isVisualMode ? null : activeDiff}
                     checkedItems={checkedItems}
