@@ -246,6 +246,13 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
   const visualDiffs = diffs
     .map((diff, idx) => ({ diff, idx }))
     .filter(({ diff }) => ['layout_changed', 'shape_resized', 'shape_modified', 'design_changed'].includes(diff.type));
+  const detailedVisualDiffs = visualDiffs.filter(({ diff }) => {
+    const rect = bboxToRect(diff.bbox);
+    const areaRatio = rectArea(rect) / Math.max(1, pageSize.width * pageSize.height);
+    if (areaRatio > 0.08) return false;
+    if (['shape_modified', 'layout_changed'].includes(diff.type) && areaRatio > 0.08) return false;
+    return true;
+  });
   const movedDiffs = diffs
     .map((diff, idx) => ({ diff, idx }))
     .filter(({ diff }) => diff.type === 'block_moved');
@@ -254,7 +261,8 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
     .filter(({ diff }) => diff.type === 'spacing_changed');
 
   if (visualDiffs.length >= 3) {
-    const allVisualClusters = clusterDiffsByRegion(visualDiffs, pageSize)
+    const clusteringSource = detailedVisualDiffs.length >= 3 ? detailedVisualDiffs : visualDiffs;
+    const allVisualClusters = clusterDiffsByRegion(clusteringSource, pageSize)
       .filter(cluster => cluster.items.length >= 2 || rectArea(bboxToRect(cluster.rect)) > 900);
     const visualClusters = allVisualClusters
       .filter(cluster => {
@@ -1402,8 +1410,13 @@ async function run() {
           const b = clampBox(blockB.bbox, imgB.width, imgB.height, pad);
           if (a.w <= 0 || a.h <= 0 || b.w <= 0 || b.h <= 0) return [];
 
-          const cropA = cropRegion(imgA, a.x, a.y, a.w, a.h);
-          const cropB = cropRegion(imgB, b.x, b.y, b.w, b.h);
+          // Use the original, unmasked render here. The normal diff pipeline masks
+          // matched shapes to avoid duplicate noise, but for review summaries we need
+          // the inside of large drawings to split into meaningful visual sub-regions.
+          const sourceA = origDataA ? { width: imgA.width, height: imgA.height, data: origDataA } : imgA;
+          const sourceB = origDataB ? { width: imgB.width, height: imgB.height, data: origDataB } : imgB;
+          const cropA = cropRegion(sourceA, a.x, a.y, a.w, a.h);
+          const cropB = cropRegion(sourceB, b.x, b.y, b.w, b.h);
           const localW = Math.max(cropA?.width || 0, cropB?.width || 0);
           const localH = Math.max(cropA?.height || 0, cropB?.height || 0);
           if (localW <= 0 || localH <= 0) return [];
@@ -1413,7 +1426,7 @@ async function run() {
           pastePng(cropA, localA);
           pastePng(cropB, localB);
 
-          const maxExactPixels = precision >= 90 ? 900000 : 360000;
+          const maxExactPixels = precision >= 90 ? 2400000 : 1800000;
           if (localW * localH > maxExactPixels) {
             const ratio = sampledDiffRatio(localA.data, localB.data, localW, 0, 0, localW, localH, precision >= 90 ? 3 : 5);
             if (ratio < 0.02) return [];
@@ -1483,21 +1496,47 @@ async function run() {
               const density = pixDiffRatio(localA.data, localB.data, localW, bx, by, bw, bh);
               if (density < 0.015) continue;
 
-              regions.push({
-                type: 'design_changed',
-                severity: 'low',
-                desc: `Block internal visual change (${Math.round(bw)}x${Math.round(bh)} px, ${Math.round(density * 100)}%)`,
-                bbox: {
-                  x: Math.min(imgA.width - 1, a.x + bx),
-                  y: Math.min(imgA.height - 1, a.y + by),
-                  width: bw,
-                  height: bh
+              const isLargeConnectedRegion = bw > 360 || bh > 360 || bw * bh > 180000;
+              if (isLargeConnectedRegion) {
+                const tileW = Math.max(180, Math.min(320, Math.ceil(bw / Math.ceil(bw / 280))));
+                const tileH = Math.max(160, Math.min(280, Math.ceil(bh / Math.ceil(bh / 240))));
+                for (let ty = by; ty < by + bh; ty += tileH) {
+                  for (let tx = bx; tx < bx + bw; tx += tileW) {
+                    const tw = Math.min(tileW, bx + bw - tx);
+                    const th = Math.min(tileH, by + bh - ty);
+                    if (tw < 24 || th < 24) continue;
+                    const tileDensity = pixDiffRatio(localA.data, localB.data, localW, tx, ty, tw, th);
+                    if (tileDensity < 0.018) continue;
+                    regions.push({
+                      type: 'design_changed',
+                      severity: 'low',
+                      desc: `Block visual change section (${Math.round(tw)}x${Math.round(th)} px, ${Math.round(tileDensity * 100)}%)`,
+                      bbox: {
+                        x: Math.min(imgA.width - 1, a.x + tx),
+                        y: Math.min(imgA.height - 1, a.y + ty),
+                        width: tw,
+                        height: th
+                      }
+                    });
+                  }
                 }
-              });
+              } else {
+                regions.push({
+                  type: 'design_changed',
+                  severity: 'low',
+                  desc: `Block internal visual change (${Math.round(bw)}x${Math.round(bh)} px, ${Math.round(density * 100)}%)`,
+                  bbox: {
+                    x: Math.min(imgA.width - 1, a.x + bx),
+                    y: Math.min(imgA.height - 1, a.y + by),
+                    width: bw,
+                    height: bh
+                  }
+                });
+              }
             }
           }
 
-          return regions.slice(0, 6);
+          return regions.slice(0, 12);
         }
 
         // Save original image data for display (masking is only for internal pixelmatch)

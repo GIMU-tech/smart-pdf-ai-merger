@@ -137,6 +137,73 @@ function renderInlineDiff(diffs: Array<[number, string]> | undefined, originalTe
 }
 
 // ─── Overlay Box (DiffBox) with HUD Tooltip ──────────────────────────────────────────
+
+function ReviewCropPreview({ page, item }: { page: PageResult; item: ReviewItem }) {
+  const [preview, setPreview] = useState<{ before: string; after: string } | null>(null);
+  const box = item.bbox;
+  const shouldPreview = item.category === 'drawing' && !!box && !!page.base64A && !!page.base64B;
+
+  useEffect(() => {
+    if (!shouldPreview || !box) {
+      setPreview(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src.startsWith('data:') ? src : `data:image/png;base64,${src}`;
+    });
+
+    const cropImage = async (src: string) => {
+      const img = await loadImage(src);
+      const pad = Math.max(24, Math.min(box.width, box.height) * 0.16);
+      const sx = Math.max(0, Math.floor(box.x - pad));
+      const sy = Math.max(0, Math.floor(box.y - pad));
+      const sw = Math.max(1, Math.min(img.naturalWidth - sx, Math.ceil(box.width + pad * 2)));
+      const sh = Math.max(1, Math.min(img.naturalHeight - sy, Math.ceil(box.height + pad * 2)));
+      const scale = Math.min(1, 360 / sw, 190 / sh);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sw * scale));
+      canvas.height = Math.max(1, Math.round(sh * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return '';
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.82);
+    };
+
+    Promise.all([cropImage(page.base64A), cropImage(page.base64B)])
+      .then(([before, after]) => {
+        if (!cancelled) setPreview({ before, after });
+      })
+      .catch(() => {
+        if (!cancelled) setPreview(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldPreview, page.base64A, page.base64B, box?.x, box?.y, box?.width, box?.height]);
+
+  if (!shouldPreview || !preview) return null;
+
+  return (
+    <div className="grid grid-cols-2 gap-1.5 rounded-lg border border-purple-100 bg-purple-50/40 p-1.5">
+      <div className="min-w-0">
+        <div className="mb-1 text-[8px] font-black uppercase tracking-wider text-rose-500">Before</div>
+        <img src={preview.before} alt="Before crop" className="w-full h-20 rounded border border-rose-100 bg-white object-contain" />
+      </div>
+      <div className="min-w-0">
+        <div className="mb-1 text-[8px] font-black uppercase tracking-wider text-emerald-600">After</div>
+        <img src={preview.after} alt="After crop" className="w-full h-20 rounded border border-emerald-100 bg-white object-contain" />
+      </div>
+    </div>
+  );
+}
+
 function DiffBox({ diff, scale, active, onHover, checked }: {
   diff: Diff; scale: number; active: boolean; onHover: (v: boolean) => void; checked: boolean; key?: any;
 }) {
@@ -1331,6 +1398,8 @@ export function CompareTab({
                               <p className="text-[10px] text-gray-700 font-semibold leading-relaxed break-words">
                                 {item.desc}
                               </p>
+
+                              {currentResult && <ReviewCropPreview page={currentResult} item={item} />}
 
                               {(item.before || item.after) && (
                                 <div className="grid gap-1 text-[9px] font-mono">
