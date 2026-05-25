@@ -97,6 +97,16 @@ const REVIEW_SEVERITY_LABEL: Record<string, string> = {
   low: '참고',
 };
 
+function overlayShortLabel(diff: Diff) {
+  if (diff.type === 'number_changed') return '값 변경';
+  if (diff.type === 'text_modified') return '문구 변경';
+  if (diff.type === 'design_changed') return '도면 변화';
+  if (diff.type === 'layout_changed') return '도형 변화';
+  if (diff.type === 'shape_resized') return '크기 변경';
+  if (diff.type === 'block_moved') return '위치 이동';
+  return meta(diff.type).label || diff.type;
+}
+
 // ─── Smart Zoom Step Calculator ─────────────────────────────────────────────────
 function getZoomStep(current: number, direction: 'in' | 'out'): number {
   if (current <= 100) return 10;
@@ -229,10 +239,19 @@ function DiffBox({ diff, scale, active, onHover, checked }: {
       }}
     >
       {!active && (
-        <div 
-          className="absolute -top-[5px] -right-[5px] w-2.5 h-2.5 rounded-full border border-white shadow-sm"
-          style={{ backgroundColor: m.ring }} 
-        />
+        <>
+          <div 
+            className="absolute -top-[5px] -right-[5px] w-2.5 h-2.5 rounded-full border border-white shadow-sm"
+            style={{ backgroundColor: m.ring }} 
+          />
+          <div
+            className="absolute -top-6 left-0 max-w-[220px] truncate rounded-md border border-white/80 px-1.5 py-0.5 text-[9px] font-black leading-none text-white shadow-md"
+            style={{ backgroundColor: m.ring }}
+            title={diff.desc || diff.type}
+          >
+            {overlayShortLabel(diff)}
+          </div>
+        </>
       )}
 
       {active && (
@@ -508,7 +527,7 @@ export function CompareTab({
   const [compareMode, setCompareMode] = useState<CompareMode>('ai');
   const [precision, setPrecision] = useState(80);
   const [showSidebar, setShowSidebar] = useState(true);
-  const [showAllDiffOverlays, setShowAllDiffOverlays] = useState(false);
+  const [showAllDiffOverlays, setShowAllDiffOverlays] = useState(true);
   const [hideCheckedReviewItems, setHideCheckedReviewItems] = useState(true);
   const [blendMode, setBlendMode] = useState<'difference' | 'normal'>('difference');
 
@@ -1383,7 +1402,7 @@ export function CompareTab({
                             showAllDiffOverlays ? "bg-gray-900 text-white border-gray-900" : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
                           )}
                         >
-                          {showAllDiffOverlays ? '?? ?? ?' : '??? ??'}
+                          {showAllDiffOverlays ? '전체 표시 중' : '선택만 표시'}
                         </button>
                         <button
                           onClick={() => setHideCheckedReviewItems(v => !v)}
@@ -1392,7 +1411,7 @@ export function CompareTab({
                             hideCheckedReviewItems ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
                           )}
                         >
-                          {hideCheckedReviewItems ? '?? ??' : '?? ??'}
+                          {hideCheckedReviewItems ? '완료 숨김' : '완료 표시'}
                         </button>
                       </div>
                     </div>
@@ -1469,7 +1488,7 @@ export function CompareTab({
 
                               {!!item.relatedDiffs?.length && (
                                 <div className="text-[8px] text-gray-400 font-bold">
-                                  세부 감지 {item.relatedDiffs.length}건 묶음
+                                  PDF 위 표시 {item.relatedDiffs.length}건
                                 </div>
                               )}
                             </div>

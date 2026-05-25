@@ -275,8 +275,8 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
         return (b.items.length * 10000 + Math.min(rectArea(br), pageSize.width * pageSize.height * 0.08)) -
                (a.items.length * 10000 + Math.min(rectArea(ar), pageSize.width * pageSize.height * 0.08));
       });
-    const primaryVisualClusters = visualClusters.slice(0, 6);
-    const remainingVisualClusters = visualClusters.slice(6);
+    const primaryVisualClusters = visualClusters.slice(0, 16);
+    const remainingVisualClusters = visualClusters.slice(16);
 
     primaryVisualClusters.forEach((cluster, clusterIdx) => {
       const relatedDiffs = cluster.items.map(x => x.idx);
@@ -284,26 +284,28 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
       addItem({
         category: 'drawing',
         severity: itemCount >= 8 ? 'high' : 'medium',
-        title: primaryVisualClusters.length === 1 ? '도면/일러스트 변경' : `도면/일러스트 변경 영역 ${clusterIdx + 1}`,
-        desc: `가까운 시각 요소 변경 후보 ${itemCount}건을 하나의 검수 영역으로 묶었습니다.`,
+        title: primaryVisualClusters.length === 1 ? '도면 변경' : `도면 변경 ${clusterIdx + 1}`,
+        desc: itemCount >= 2
+          ? `가까운 도면/이미지 변화 ${itemCount}건을 하나의 확인 지점으로 표시했습니다. PDF 위의 빨간 박스 위치를 원본과 수정본에서 바로 대조하세요.`
+          : '도면/이미지 안에서 실제 픽셀 변화가 감지된 위치입니다. PDF 위의 빨간 박스를 바로 확인하세요.',
         bbox: cluster.rect,
         relatedDiffs,
         confidence: 0.78
       });
     });
 
-    if (remainingVisualClusters.length) {
-      const relatedDiffs = remainingVisualClusters.flatMap(cluster => cluster.items.map(x => x.idx));
+    remainingVisualClusters.slice(0, 6).forEach((cluster, clusterIdx) => {
+      const relatedDiffs = cluster.items.map(x => x.idx);
       addItem({
         category: 'drawing',
         severity: 'low',
-        title: '추가 시각 변경 후보',
-        desc: `작거나 반복적인 시각 변경 후보 ${relatedDiffs.length}건은 참고 묶음으로 낮췄습니다.`,
-        bbox: unionBbox(remainingVisualClusters.map(cluster => ({ bbox: cluster.rect }))),
+        title: `추가 도면 변화 후보 ${clusterIdx + 1}`,
+        desc: `작거나 반복적인 도면 변화 후보 ${relatedDiffs.length}건입니다. 주요 변경을 확인한 뒤 참고로 보세요.`,
+        bbox: cluster.rect,
         relatedDiffs,
         confidence: 0.58
       });
-    }
+    });
   } else {
     visualDiffs.forEach(({ diff, idx }) => addItem({
       category: 'drawing',
