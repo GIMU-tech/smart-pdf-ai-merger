@@ -14,6 +14,8 @@ import {
   ZoomOut,
   ChevronLeft,
   ChevronRight,
+  Home,
+  FilePlus2,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -25,6 +27,10 @@ type ViewerState = {
   mode: PreviewMode;
   pageCount: number;
   converted: boolean;
+};
+
+type IllustratorViewerTabProps = {
+  onGoHome?: () => void;
 };
 
 const SUPPORTED_EXTENSIONS = ['ai', 'eps', 'svg', 'pdf'];
@@ -78,7 +84,7 @@ async function makeTypedBlobUrl(file: File, mimeType: string) {
   };
 }
 
-export function IllustratorViewerTab() {
+export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const previousUrlRef = useRef<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -195,18 +201,89 @@ export function IllustratorViewerTab() {
   const zoomLabel = useMemo(() => `${zoom}%`, [zoom]);
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-black tracking-tight text-gray-950">일러스트 뷰어</h2>
-          <p className="mt-1 text-sm font-medium text-gray-400">AI, EPS, SVG, PDF 파일을 빠르게 열어 확대 검수합니다.</p>
+    <div className="flex h-full min-h-0 w-full flex-col bg-slate-100">
+      <div className="flex min-h-12 flex-shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
+        <button
+          onClick={onGoHome}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 transition hover:bg-slate-50"
+        >
+          <Home className="h-4 w-4" />
+          홈
+        </button>
+
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div className="rounded-lg bg-slate-900 p-2 text-white">
+            <FileImage className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-black text-slate-950">
+              {viewer ? viewer.file.name : '일러스트 뷰어'}
+            </p>
+            <p className="truncate text-[11px] font-bold text-slate-400">
+              {viewer
+                ? `${extensionOf(viewer.file).toUpperCase()} · ${formatSize(viewer.file.size)} · ${viewer.converted ? '변환 미리보기' : '원본 벡터'}`
+                : 'AI, EPS, SVG, PDF 파일을 열어 확대 검수'}
+            </p>
+          </div>
         </div>
+
         {viewer && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
+              title="이전 페이지"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="min-w-16 rounded-lg bg-slate-100 px-3 py-2 text-center text-xs font-black text-slate-700">{page} / {viewer.pageCount}</span>
+            <button
+              onClick={() => setPage(p => Math.min(viewer.pageCount, p + 1))}
+              disabled={page >= viewer.pageCount}
+              className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
+              title="다음 페이지"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+
+            <button onClick={() => setZoom(z => Math.max(25, z - 25))} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50" title="축소"><ZoomOut className="h-4 w-4" /></button>
+            <span className="min-w-14 rounded-lg bg-slate-100 px-3 py-2 text-center text-xs font-black text-slate-700">{zoomLabel}</span>
+            <button onClick={() => setZoom(z => Math.min(800, z + 25))} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50" title="확대"><ZoomIn className="h-4 w-4" /></button>
+            <button onClick={() => setZoom(100)} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50" title="화면 맞춤"><Maximize2 className="h-4 w-4" /></button>
+
+            {canConvert && (
+              <button
+                onClick={() => void convertPreview()}
+                disabled={loading}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                변환 보기
+              </button>
+            )}
+
+            <button onClick={downloadOriginal} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-black text-white transition hover:bg-slate-700">
+              <Download className="h-4 w-4" />
+              원본
+            </button>
+            <button
+              onClick={() => inputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 transition hover:bg-slate-50"
+            >
+              <FilePlus2 className="h-4 w-4" />
+              새 파일
+            </button>
+          </div>
+        )}
+
+        {!viewer && (
           <button
             onClick={() => inputRef.current?.click()}
-            className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-600 shadow-sm transition hover:bg-gray-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-black text-white transition hover:bg-slate-700"
           >
-            새 파일 열기
+            <Upload className="h-4 w-4" />
+            파일 열기
           </button>
         )}
       </div>
@@ -217,7 +294,7 @@ export function IllustratorViewerTab() {
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="flex items-center gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600"
+            className="mx-3 mt-2 flex flex-shrink-0 items-center gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600"
           >
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             <span className="flex-1">{error}</span>
@@ -227,87 +304,46 @@ export function IllustratorViewerTab() {
       </AnimatePresence>
 
       {!viewer ? (
-        <div
-          onDragOver={e => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={e => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
-          onClick={() => inputRef.current?.click()}
-          className={cn(
-            'flex flex-1 min-h-[480px] cursor-pointer select-none flex-col items-center justify-center gap-4 rounded-3xl border bg-white transition-all',
-            dragging ? 'border-gray-500 bg-gray-50 shadow-lg' : 'border-dashed border-gray-200 hover:border-gray-300 hover:bg-gray-50/60'
-          )}
-        >
-          <div className="rounded-2xl border border-gray-100 bg-gray-50 p-5 text-gray-400 shadow-sm">
-            <Upload className="h-8 w-8" />
-          </div>
-          <div className="text-center">
-            <p className="text-base font-black text-gray-800">일러스트 파일을 드래그하거나 클릭해서 열기</p>
-            <p className="mt-2 text-xs font-bold tracking-wide text-gray-400">.ai · .eps · .svg · .pdf</p>
+        <div className="min-h-0 flex-1 p-4">
+          <div
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={e => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
+            onClick={() => inputRef.current?.click()}
+            className={cn(
+              'flex h-full min-h-[420px] cursor-pointer select-none flex-col items-center justify-center gap-4 rounded-3xl border bg-white transition-all',
+              dragging ? 'border-slate-500 bg-slate-50 shadow-lg' : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white/80'
+            )}
+          >
+            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-5 text-slate-400 shadow-sm">
+              <Upload className="h-8 w-8" />
+            </div>
+            <div className="text-center">
+              <p className="text-base font-black text-slate-800">파일을 드래그하거나 클릭해서 열기</p>
+              <p className="mt-2 text-xs font-bold tracking-wide text-slate-400">.ai · .eps · .svg · .pdf</p>
+            </div>
           </div>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 bg-gray-50/70 px-4 py-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="rounded-xl bg-gray-900 p-2 text-white">
-                <FileImage className="h-4 w-4" />
-              </div>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black text-gray-900">{viewer.file.name}</p>
-                <p className="text-[11px] font-bold text-gray-400">
-                  {extensionOf(viewer.file).toUpperCase()} · {formatSize(viewer.file.size)} · {viewer.converted ? '변환 미리보기' : '원본 벡터'}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPage(p => Math.max(1, p - 1))}
-                disabled={page <= 1}
-                className="rounded-lg border border-gray-200 bg-white p-2 text-gray-500 disabled:opacity-30"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <span className="min-w-16 text-center text-xs font-black text-gray-700">{page} / {viewer.pageCount}</span>
-              <button
-                onClick={() => setPage(p => Math.min(viewer.pageCount, p + 1))}
-                disabled={page >= viewer.pageCount}
-                className="rounded-lg border border-gray-200 bg-white p-2 text-gray-500 disabled:opacity-30"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-
-              <button onClick={() => setZoom(z => Math.max(25, z - 25))} className="rounded-lg border border-gray-200 bg-white p-2 text-gray-500"><ZoomOut className="h-4 w-4" /></button>
-              <span className="min-w-14 text-center text-xs font-black text-gray-700">{zoomLabel}</span>
-              <button onClick={() => setZoom(z => Math.min(800, z + 25))} className="rounded-lg border border-gray-200 bg-white p-2 text-gray-500"><ZoomIn className="h-4 w-4" /></button>
-              <button onClick={() => setZoom(100)} className="rounded-lg border border-gray-200 bg-white p-2 text-gray-500" title="화면 맞춤"><Maximize2 className="h-4 w-4" /></button>
-              {canConvert && (
-                <button
-                  onClick={() => void convertPreview()}
-                  disabled={loading}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-600 disabled:opacity-50"
-                >
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <span className="flex items-center gap-1"><RefreshCcw className="h-4 w-4" /> 변환 보기</span>}
-                </button>
-              )}
-              <button onClick={downloadOriginal} className="rounded-lg bg-gray-900 px-3 py-2 text-xs font-black text-white">
-                <span className="flex items-center gap-1"><Download className="h-4 w-4" /> 원본</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-auto bg-[radial-gradient(circle_at_1px_1px,#d7dce3_1px,transparent_0)] [background-size:18px_18px] p-6">
-            <div className="mx-auto bg-white shadow-2xl" style={{ width: `${zoom}%`, minWidth: zoom > 100 ? `${zoom}%` : undefined, minHeight: '70vh' }}>
-              {viewer.mode === 'svg' || viewer.mode === 'image' ? (
-                <img src={viewer.sourceUrl} alt={viewer.file.name} className="block h-auto w-full select-none" draggable={false} />
-              ) : (
-                <iframe
-                  src={viewerSrc(viewer.sourceUrl, page)}
-                  title={viewer.file.name}
-                  className="h-[78vh] w-full border-0 bg-white"
-                />
-              )}
-            </div>
+        <div className="min-h-0 flex-1 overflow-auto bg-[radial-gradient(circle_at_1px_1px,#cbd5e1_1px,transparent_0)] [background-size:18px_18px] p-4">
+          <div
+            className="mx-auto bg-white shadow-2xl"
+            style={{
+              width: `${zoom}%`,
+              minWidth: zoom > 100 ? `${zoom}%` : undefined,
+              height: viewer.mode === 'pdf' ? '100%' : undefined,
+              minHeight: viewer.mode === 'pdf' ? '720px' : undefined,
+            }}
+          >
+            {viewer.mode === 'svg' || viewer.mode === 'image' ? (
+              <img src={viewer.sourceUrl} alt={viewer.file.name} className="block h-auto w-full select-none" draggable={false} />
+            ) : (
+              <iframe
+                src={viewerSrc(viewer.sourceUrl, page)}
+                title={viewer.file.name}
+                className="h-full min-h-[720px] w-full border-0 bg-white"
+              />
+            )}
           </div>
         </div>
       )}

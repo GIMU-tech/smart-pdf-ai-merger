@@ -12,6 +12,12 @@ import {
   CheckCircle2,
   FolderOpen,
   ChevronRight,
+  Home,
+  ArrowRight,
+  Files,
+  Printer,
+  Search,
+  FileImage,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { CompareTab } from './features/compare/CompareTab';
@@ -24,6 +30,67 @@ interface FileItem {
   size: number;
 }
 
+type AppTab = 'home' | 'merge' | 'outline' | 'compare' | 'illustrator';
+
+type FeatureCard = {
+  tab: Exclude<AppTab, 'home'>;
+  title: string;
+  eyebrow: string;
+  description: string;
+  formats: string;
+  purpose: string;
+  cta: string;
+  accent: string;
+  icon: React.ComponentType<{ className?: string }>;
+};
+
+const featureCards: FeatureCard[] = [
+  {
+    tab: 'merge',
+    title: 'PDF 병합',
+    eyebrow: '문서 정리',
+    description: '여러 PDF와 PDF 호환 AI 파일을 순서대로 하나의 PDF로 합칩니다.',
+    formats: 'PDF, AI',
+    purpose: '인쇄물 묶음, 납품 파일 정리',
+    cta: '파일 합치기',
+    accent: 'from-sky-500 to-cyan-400',
+    icon: Files,
+  },
+  {
+    tab: 'outline',
+    title: '인쇄용 변환',
+    eyebrow: '출력 준비',
+    description: '원본과 인쇄용 파일을 함께 내려받을 수 있도록 아웃라인 변환을 실행합니다.',
+    formats: 'PDF, AI',
+    purpose: '폰트 깨짐 방지, 출력소 전달',
+    cta: '인쇄용 만들기',
+    accent: 'from-amber-500 to-orange-400',
+    icon: Printer,
+  },
+  {
+    tab: 'compare',
+    title: 'PDF 비교',
+    eyebrow: '정밀 검수',
+    description: '원본과 수정본을 대조해 텍스트, 수치, 도면 변경 후보를 검수합니다.',
+    formats: 'PDF',
+    purpose: '수정 전후 확인, 인쇄 사고 예방',
+    cta: '변경점 찾기',
+    accent: 'from-rose-500 to-red-400',
+    icon: Search,
+  },
+  {
+    tab: 'illustrator',
+    title: '일러스트 뷰어',
+    eyebrow: '벡터 확인',
+    description: 'AI, EPS, SVG, PDF 파일을 빠르게 열어 확대 검수하고 원본을 내려받습니다.',
+    formats: 'AI, EPS, SVG, PDF',
+    purpose: '일러스트 파일 미리보기, 확대 검수',
+    cta: '파일 열어보기',
+    accent: 'from-emerald-500 to-teal-400',
+    icon: FileImage,
+  },
+];
+
 function formatSize(bytes: number) {
   if (bytes === 0) return '0 B';
   const k = 1024;
@@ -33,7 +100,7 @@ function formatSize(bytes: number) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'merge' | 'outline' | 'compare' | 'illustrator'>('merge');
+  const [activeTab, setActiveTab] = useState<AppTab>('home');
 
   // ── Merge tab state ──
   const [mergeFiles, setMergeFiles] = useState<FileItem[]>([]);
@@ -244,30 +311,39 @@ export default function App() {
     }
   };
 
+  const navItems: { tab: AppTab; label: string }[] = [
+    { tab: 'home', label: '홈' },
+    { tab: 'merge', label: 'PDF 병합' },
+    { tab: 'outline', label: '인쇄용 변환' },
+    { tab: 'compare', label: 'PDF 비교' },
+    { tab: 'illustrator', label: '일러스트 뷰어' },
+  ];
+
   return (
-    <div className="min-h-screen bg-white text-gray-900 flex flex-col" style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}>
+    <div className="min-h-screen bg-[#f7f4ec] text-gray-900 flex flex-col" style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}>
 
       {/* ── Top bar ── */}
-      <header className="border-b border-gray-100 px-8 h-14 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-6 h-6 bg-gray-900 rounded flex items-center justify-center">
+      <header className="border-b border-gray-200/80 bg-white/90 px-4 sm:px-8 h-14 flex items-center justify-between flex-shrink-0 backdrop-blur">
+        <button onClick={() => setActiveTab('home')} className="flex items-center gap-3">
+          <div className="w-6 h-6 bg-gray-900 rounded flex items-center justify-center shadow-sm">
             <FilePlus2 className="w-3.5 h-3.5 text-white" />
           </div>
           <span className="text-sm font-semibold tracking-tight">PDF & AI 툴킷</span>
-        </div>
-        <nav className="flex items-center gap-1">
-          {(['merge', 'outline', 'compare', 'illustrator'] as const).map(tab => (
+        </button>
+        <nav className="flex items-center gap-1 overflow-x-auto">
+          {navItems.map(({ tab, label }) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
-                'px-4 py-1.5 rounded-md text-xs font-medium transition-all',
+                'whitespace-nowrap px-3 sm:px-4 py-1.5 rounded-md text-xs font-medium transition-all',
                 activeTab === tab
                   ? 'bg-gray-900 text-white'
                   : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
               )}
             >
-              {tab === 'merge' ? 'PDF 병합' : tab === 'outline' ? '인쇄용 변환' : tab === 'compare' ? 'PDF 비교' : '일러스트 뷰어'}
+              {tab === 'home' && <Home className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />}
+              {label}
             </button>
           ))}
         </nav>
@@ -276,14 +352,81 @@ export default function App() {
       {/* ── Content ── */}
       <main className={cn(
         "flex-grow flex flex-col w-full min-h-0 min-w-0 transition-all duration-300",
-        activeTab === 'compare'
+        activeTab === 'home'
+          ? "max-w-none bg-[#f7f4ec] px-4 py-6 sm:px-8 sm:py-10"
+          : activeTab === 'compare'
           ? (compareResults && compareResults.length > 0) || compareExpanded
             ? "max-w-none p-6 bg-gray-150/40 h-[calc(100vh-56px)]"
             : "max-w-2xl mx-auto px-6 py-10 gap-6"
           : activeTab === 'illustrator'
-            ? "max-w-none p-6 bg-gray-150/40 h-[calc(100vh-56px)]"
+            ? "max-w-none p-0 bg-gray-100 h-[calc(100vh-56px)]"
             : "max-w-2xl mx-auto px-6 py-10 gap-6"
       )}>
+
+        {/* ── HOME DASHBOARD ── */}
+        <div style={{ display: activeTab === 'home' ? 'block' : 'none' }} className="w-full animate-fadeIn">
+          <section className="relative mx-auto max-w-6xl overflow-hidden rounded-[2rem] border border-white/70 bg-white/70 p-6 shadow-sm sm:p-9">
+            <div className="pointer-events-none absolute inset-0 opacity-70 [background-image:linear-gradient(rgba(15,23,42,.045)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,.045)_1px,transparent_1px)] [background-size:28px_28px]" />
+            <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full bg-amber-200/50 blur-3xl" />
+            <div className="pointer-events-none absolute -bottom-24 -left-24 h-72 w-72 rounded-full bg-sky-200/50 blur-3xl" />
+
+            <div className="relative flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.28em] text-gray-400">Print Studio Desk</p>
+                <h1 className="mt-3 text-3xl font-black tracking-tight text-gray-950 sm:text-5xl">필요한 인쇄 도구를 바로 시작하세요</h1>
+                <p className="mt-4 max-w-2xl text-sm font-medium leading-6 text-gray-500">
+                  병합, 인쇄용 변환, 수정 검수, 일러스트 파일 확인을 한 화면에서 고르고 작업 흐름을 이어갑니다.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-gray-200/80 bg-white/80 px-4 py-3 text-xs font-bold text-gray-500 shadow-sm">
+                최근 작업 기록은 다음 버전에서 추가하고, 이번 화면은 빠른 진입에 집중했습니다.
+              </div>
+            </div>
+
+            <div className="relative mt-8 grid gap-4 md:grid-cols-2">
+              {featureCards.map((card, index) => {
+                const Icon = card.icon;
+                return (
+                  <motion.button
+                    key={card.tab}
+                    type="button"
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.04 }}
+                    onClick={() => setActiveTab(card.tab)}
+                    className="group relative overflow-hidden rounded-3xl border border-gray-200/80 bg-white/90 p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-xl"
+                  >
+                    <div className={cn('absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r', card.accent)} />
+                    <div className="flex items-start justify-between gap-4">
+                      <div className={cn('rounded-2xl bg-gradient-to-br p-3 text-white shadow-sm', card.accent)}>
+                        <Icon className="h-5 w-5" />
+                      </div>
+                      <span className="rounded-full bg-gray-100 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-gray-500">{card.eyebrow}</span>
+                    </div>
+                    <h2 className="mt-5 text-xl font-black tracking-tight text-gray-950">{card.title}</h2>
+                    <p className="mt-2 min-h-12 text-sm font-medium leading-6 text-gray-500">{card.description}</p>
+                    <div className="mt-5 grid gap-2 rounded-2xl border border-gray-100 bg-gray-50/70 p-3 text-xs font-bold text-gray-500">
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-400">지원 포맷</span>
+                        <span className="text-gray-800">{card.formats}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-400">사용 목적</span>
+                        <span className="text-right text-gray-800">{card.purpose}</span>
+                      </div>
+                    </div>
+                    <div className="mt-5 flex items-center justify-between">
+                      <span className="text-sm font-black text-gray-900">{card.cta}</span>
+                      <span className="rounded-full bg-gray-900 p-2 text-white transition group-hover:translate-x-1">
+                        <ArrowRight className="h-4 w-4" />
+                      </span>
+                    </div>
+                  </motion.button>
+                );
+              })}
+            </div>
+          </section>
+        </div>
 
         {/* ════ TAB 1: MERGE ════ */}
         <div style={{ display: activeTab === 'merge' ? 'flex' : 'none' }} className="flex-col gap-6 w-full flex animate-fadeIn">
@@ -538,7 +681,7 @@ export default function App() {
           style={{ display: activeTab === 'illustrator' ? 'flex' : 'none' }}
           className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
         >
-          <IllustratorViewerTab />
+          <IllustratorViewerTab onGoHome={() => setActiveTab('home')} />
         </div>
 
         <div 
