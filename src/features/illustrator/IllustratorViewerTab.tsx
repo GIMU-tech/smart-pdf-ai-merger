@@ -64,6 +64,20 @@ function viewerSrc(url: string, page: number) {
   return `${url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH&page=${page}`;
 }
 
+async function hasPdfHeader(file: File) {
+  const header = await file.slice(0, 5).arrayBuffer();
+  return new TextDecoder('ascii').decode(header) === '%PDF-';
+}
+
+async function makeTypedBlobUrl(file: File, mimeType: string) {
+  const buffer = await file.arrayBuffer();
+  const blob = new Blob([buffer], { type: mimeType });
+  return {
+    blob,
+    url: URL.createObjectURL(blob),
+  };
+}
+
 export function IllustratorViewerTab() {
   const inputRef = useRef<HTMLInputElement>(null);
   const previousUrlRef = useRef<string | null>(null);
@@ -102,13 +116,21 @@ export function IllustratorViewerTab() {
       return;
     }
 
-    const url = URL.createObjectURL(file);
+    if (ext === 'ai' && !(await hasPdfHeader(file))) {
+      await convertPreview(file);
+      return;
+    }
+
+    const typed = ext === 'svg'
+      ? await makeTypedBlobUrl(file, 'image/svg+xml')
+      : await makeTypedBlobUrl(file, 'application/pdf');
+    const url = typed.url;
     resetUrl(url);
     setViewer({
       file,
       sourceUrl: url,
       mode: ext === 'svg' ? 'svg' : 'pdf',
-      pageCount: ext === 'svg' ? 1 : await countPdfPages(file),
+      pageCount: ext === 'svg' ? 1 : await countPdfPages(typed.blob),
       converted: false,
     });
   };
