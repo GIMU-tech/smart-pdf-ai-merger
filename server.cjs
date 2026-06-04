@@ -140,6 +140,83 @@ app.post('/process-outline', localUpload.single('file'), (req, res) => {
   });
 });
 
+// Route 2.25: Preview Illustrator/PDF/SVG/EPS files
+app.post('/preview-illustrator', localUpload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: '업로드된 파일이 없습니다.' });
+  }
+
+  const uploadedPath = req.file.path;
+  const originalNameUtf8 = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+  const ext = path.extname(originalNameUtf8).replace('.', '').toLowerCase();
+  const baseName = path.parse(originalNameUtf8).name || 'preview';
+  const allowed = new Set(['ai', 'eps', 'pdf', 'svg']);
+
+  if (!allowed.has(ext)) {
+    try { fs.unlinkSync(uploadedPath); } catch (_) {}
+    return res.status(400).json({ success: false, error: 'AI, EPS, SVG, PDF 파일만 미리보기할 수 있습니다.' });
+  }
+
+  if (ext === 'svg') {
+    try {
+      const svgData = fs.readFileSync(uploadedPath).toString('base64');
+      try { fs.unlinkSync(uploadedPath); } catch (_) {}
+      return res.json({
+        success: true,
+        mode: 'image',
+        fileName: baseName + '.svg',
+        mimeType: 'image/svg+xml',
+        fileData: svgData
+      });
+    } catch (err) {
+      try { fs.unlinkSync(uploadedPath); } catch (_) {}
+      return res.status(500).json({ success: false, error: 'SVG 파일을 읽지 못했습니다.' });
+    }
+  }
+
+  const outputPath = path.join(tempDir, 'illustrator_preview_' + Date.now() + '_' + Math.random().toString(36).slice(2) + '.pdf');
+  const args = [
+    '-dSAFER',
+    '-dBATCH',
+    '-dNOPAUSE',
+    '-sDEVICE=pdfwrite',
+    '-dCompatibilityLevel=1.6',
+    '-dPDFSETTINGS=/prepress',
+    '-sOutputFile=' + outputPath,
+  ];
+  if (gsLibPath) args.unshift('-I' + gsLibPath);
+  args.push(uploadedPath);
+
+  execFile(gsPath, args, (err, stdout, stderr) => {
+    try { fs.unlinkSync(uploadedPath); } catch (_) {}
+
+    if (err) {
+      console.error('[API Server] Illustrator preview failed:', err, stderr);
+      try { fs.unlinkSync(outputPath); } catch (_) {}
+      return res.status(500).json({
+        success: false,
+        error: 'PDF 호환 저장된 AI 파일이 아니거나 EPS 변환에 실패했습니다.'
+      });
+    }
+
+    try {
+      const fileData = fs.readFileSync(outputPath).toString('base64');
+      try { fs.unlinkSync(outputPath); } catch (_) {}
+      return res.json({
+        success: true,
+        mode: 'pdf',
+        fileName: baseName + '.pdf',
+        mimeType: 'application/pdf',
+        fileData
+      });
+    } catch (readErr) {
+      console.error('[API Server] Illustrator preview read failed:', readErr);
+      try { fs.unlinkSync(outputPath); } catch (_) {}
+      return res.status(500).json({ success: false, error: '변환된 미리보기 파일을 읽지 못했습니다.' });
+    }
+  });
+});
+
 // Route 2.5: Fast Render PDF for Instant Visual Compare (No AI analysis)
 app.post('/quick-render', localUpload.fields([{ name: 'fileA', maxCount: 1 }, { name: 'fileB', maxCount: 1 }]), async (req, res) => {
   if (!req.files || !req.files['fileA'] || !req.files['fileB']) {

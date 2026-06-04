@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { CompareTab } from './features/compare/CompareTab';
+import { IllustratorViewerTab } from './features/illustrator/IllustratorViewerTab';
 
 interface FileItem {
   id: string;
@@ -32,7 +33,7 @@ function formatSize(bytes: number) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'merge' | 'outline' | 'compare'>('merge');
+  const [activeTab, setActiveTab] = useState<'merge' | 'outline' | 'compare' | 'illustrator'>('merge');
 
   // ── Merge tab state ──
   const [mergeFiles, setMergeFiles] = useState<FileItem[]>([]);
@@ -255,7 +256,7 @@ export default function App() {
           <span className="text-sm font-semibold tracking-tight">PDF & AI 툴킷</span>
         </div>
         <nav className="flex items-center gap-1">
-          {(['merge', 'outline', 'compare'] as const).map(tab => (
+          {(['merge', 'outline', 'compare', 'illustrator'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -266,7 +267,7 @@ export default function App() {
                   : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
               )}
             >
-              {tab === 'merge' ? 'PDF 병합' : tab === 'outline' ? '인쇄용 변환' : 'PDF 비교'}
+              {tab === 'merge' ? 'PDF 병합' : tab === 'outline' ? '인쇄용 변환' : tab === 'compare' ? 'PDF 비교' : '일러스트 뷰어'}
             </button>
           ))}
         </nav>
@@ -279,7 +280,9 @@ export default function App() {
           ? (compareResults && compareResults.length > 0) || compareExpanded
             ? "max-w-none p-6 bg-gray-150/40 h-[calc(100vh-56px)]"
             : "max-w-2xl mx-auto px-6 py-10 gap-6"
-          : "max-w-2xl mx-auto px-6 py-10 gap-6"
+          : activeTab === 'illustrator'
+            ? "max-w-none p-6 bg-gray-150/40 h-[calc(100vh-56px)]"
+            : "max-w-2xl mx-auto px-6 py-10 gap-6"
       )}>
 
         {/* ════ TAB 1: MERGE ════ */}
@@ -530,6 +533,14 @@ export default function App() {
         </div>
 
         {/* ════ TAB 3: COMPARE ════ */}
+        {/* TAB 4: ILLUSTRATOR VIEWER */}
+        <div
+          style={{ display: activeTab === 'illustrator' ? 'flex' : 'none' }}
+          className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
+        >
+          <IllustratorViewerTab />
+        </div>
+
         <div 
           style={{ display: activeTab === 'compare' ? 'flex' : 'none' }} 
           className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
