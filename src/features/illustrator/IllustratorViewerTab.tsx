@@ -5,15 +5,11 @@ import {
   AlertCircle,
   Download,
   FileImage,
-  Loader2,
   Maximize2,
-  RefreshCcw,
   Upload,
   X,
   ZoomIn,
   ZoomOut,
-  ChevronLeft,
-  ChevronRight,
   Home,
   FilePlus2,
 } from 'lucide-react';
@@ -66,8 +62,8 @@ async function countPdfPages(fileOrBlob: Blob) {
   }
 }
 
-function viewerSrc(url: string, page: number) {
-  return `${url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH&page=${page}`;
+function viewerSrc(url: string) {
+  return `${url}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`;
 }
 
 async function hasPdfHeader(file: File) {
@@ -197,7 +193,6 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
     URL.revokeObjectURL(url);
   };
 
-  const canConvert = !!viewer && ['ai', 'eps'].includes(extensionOf(viewer.file));
   const zoomLabel = useMemo(() => `${zoom}%`, [zoom]);
 
   return (
@@ -221,7 +216,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
             </p>
             <p className="truncate text-[11px] font-bold text-slate-400">
               {viewer
-                ? `${extensionOf(viewer.file).toUpperCase()} · ${formatSize(viewer.file.size)} · ${viewer.converted ? '변환 미리보기' : '원본 벡터'}`
+                ? `${extensionOf(viewer.file).toUpperCase()} · ${formatSize(viewer.file.size)} · ${viewer.converted ? 'PDF 미리보기' : '원본 벡터'}`
                 : 'AI, EPS, SVG, PDF 파일을 열어 확대 검수'}
             </p>
           </div>
@@ -229,39 +224,10 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
 
         {viewer && (
           <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page <= 1}
-              className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
-              title="이전 페이지"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="min-w-16 rounded-lg bg-slate-100 px-3 py-2 text-center text-xs font-black text-slate-700">{page} / {viewer.pageCount}</span>
-            <button
-              onClick={() => setPage(p => Math.min(viewer.pageCount, p + 1))}
-              disabled={page >= viewer.pageCount}
-              className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
-              title="다음 페이지"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-
             <button onClick={() => setZoom(z => Math.max(25, z - 25))} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50" title="축소"><ZoomOut className="h-4 w-4" /></button>
             <span className="min-w-14 rounded-lg bg-slate-100 px-3 py-2 text-center text-xs font-black text-slate-700">{zoomLabel}</span>
             <button onClick={() => setZoom(z => Math.min(800, z + 25))} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50" title="확대"><ZoomIn className="h-4 w-4" /></button>
             <button onClick={() => setZoom(100)} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50" title="화면 맞춤"><Maximize2 className="h-4 w-4" /></button>
-
-            {canConvert && (
-              <button
-                onClick={() => void convertPreview()}
-                disabled={loading}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-              >
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                변환 보기
-              </button>
-            )}
 
             <button onClick={downloadOriginal} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-black text-white transition hover:bg-slate-700">
               <Download className="h-4 w-4" />
@@ -339,7 +305,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
               <img src={viewer.sourceUrl} alt={viewer.file.name} className="block h-auto w-full select-none" draggable={false} />
             ) : (
               <iframe
-                src={viewerSrc(viewer.sourceUrl, page)}
+                src={viewerSrc(viewer.sourceUrl)}
                 title={viewer.file.name}
                 className="h-full min-h-[720px] w-full border-0 bg-white"
               />

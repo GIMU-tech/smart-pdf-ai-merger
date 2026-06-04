@@ -74,10 +74,9 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
     : path.join(__dirname, 'bin', 'gs', 'lib');
 
   // Define target output paths
-  const origAiPath = path.join(saveDirectory, `(원본)${cleanName}.ai`);
-  const origPdfPath = path.join(saveDirectory, `(원본)${cleanName}.pdf`);
+  const originalExt = path.extname(filePath).toLowerCase() || '.pdf';
+  const origPath = path.join(saveDirectory, `(원본)${cleanName}${originalExt}`);
   const printPdfPath = path.join(saveDirectory, `(인쇄용)${cleanName}.pdf`);
-  const printAiPath = path.join(saveDirectory, `(인쇄용)${cleanName}.ai`);
 
   try {
     // Check if Ghostscript exists
@@ -85,13 +84,10 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
       throw new Error(`변환 엔진(Ghostscript)을 찾을 수 없습니다. 경로: ${gsPath}`);
     }
 
-    // 1. Save (원본)파일명.ai (Original copy)
-    fs.copyFileSync(filePath, origAiPath);
+    // 1. Save the original file exactly as uploaded.
+    fs.copyFileSync(filePath, origPath);
 
-    // 2. Save (원본)파일명.pdf (Original copy as PDF)
-    fs.copyFileSync(filePath, origPdfPath);
-
-    // 3. Save (인쇄용)파일명.pdf (Precisely outline text using Ghostscript pdfwrite -dNoOutputFonts)
+    // 2. Save the outlined print PDF. Do not rename this PDF as .ai because Illustrator artboards can break.
     await new Promise((resolve, reject) => {
       execFile(gsPath, [
         '-I' + gsLibPath,
@@ -101,7 +97,7 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
         '-sDEVICE=pdfwrite',
         '-dCompatibilityLevel=1.6',
         '-dNoOutputFonts=true',
-        origPdfPath
+        filePath
       ], (err, stdout, stderr) => {
         if (err) {
           console.error('Ghostscript failed:', err, stderr);
@@ -112,10 +108,14 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
       });
     });
 
-    // 4. Save (인쇄용)파일명.ai (Copy the outlined PDF and rename to .ai)
-    fs.copyFileSync(printPdfPath, printAiPath);
-
-    return { success: true };
+    return {
+      success: true,
+      files: [
+        path.basename(origPath),
+        path.basename(printPdfPath),
+      ],
+      warning: '인쇄용 AI는 대지 손상 위험이 있어 생성하지 않았습니다. 인쇄용 PDF를 사용해주세요.',
+    };
   } catch (error) {
     console.error('Processing failed:', error);
     return { success: false, error: error.message };
@@ -160,4 +160,3 @@ ipcMain.handle('compare-pdfs', async (event, { fileA, fileB, sensitivity }) => {
     });
   });
 });
-

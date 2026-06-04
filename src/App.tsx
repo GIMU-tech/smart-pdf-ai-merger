@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { PDFDocument } from 'pdf-lib';
 import { motion, AnimatePresence } from 'motion/react';
+import JSZip from 'jszip';
 import {
   Upload,
   FilePlus2,
@@ -30,6 +31,15 @@ interface FileItem {
   size: number;
 }
 
+type DownloadItem = {
+  id: string;
+  label: string;
+  fileName: string;
+  blob: Blob;
+  note?: string;
+  emphasis?: boolean;
+};
+
 type AppTab = 'home' | 'merge' | 'outline' | 'compare' | 'illustrator';
 
 type FeatureCard = {
@@ -49,9 +59,9 @@ const featureCards: FeatureCard[] = [
     tab: 'merge',
     title: 'PDF 병합',
     eyebrow: '문서 정리',
-    description: '여러 PDF와 PDF 호환 AI 파일을 순서대로 하나의 PDF로 합칩니다.',
-    formats: 'PDF, AI',
-    purpose: '인쇄물 묶음, 납품 파일 정리',
+    description: 'PDF, PDF 호환 AI, 이미지, SVG 파일을 순서대로 하나의 PDF로 합칩니다.',
+    formats: 'PDF, AI, 이미지, SVG',
+    purpose: '인쇄물 묶음, 이미지 포함 납품 파일 정리',
     cta: '파일 합치기',
     accent: 'from-sky-500 to-cyan-400',
     icon: Files,
@@ -99,6 +109,69 @@ function formatSize(bytes: number) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
+const MERGE_EXTENSIONS = ['pdf', 'ai', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
+const IMAGE_MERGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
+
+function extensionOfName(name: string) {
+  return name.split('.').pop()?.toLowerCase() || '';
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function readImage(file: File) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.decoding = 'async';
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('이미지를 읽을 수 없습니다.'));
+      img.src = url;
+    });
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function addImagePageToPdf(target: PDFDocument, file: File) {
+  const img = await readImage(file);
+  const width = img.naturalWidth || img.width || 1000;
+  const height = img.naturalHeight || img.height || 1000;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('이미지 변환 캔버스를 만들 수 없습니다.');
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+
+  const pngBytes = await new Promise<Uint8Array>((resolve, reject) => {
+    canvas.toBlob(async blob => {
+      if (!blob) {
+        reject(new Error('이미지를 PDF 페이지로 변환하지 못했습니다.'));
+        return;
+      }
+      resolve(new Uint8Array(await blob.arrayBuffer()));
+    }, 'image/png');
+  });
+
+  const embedded = await target.embedPng(pngBytes);
+  const page = target.addPage([width, height]);
+  page.drawImage(embedded, { x: 0, y: 0, width, height });
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('home');
 
@@ -117,6 +190,8 @@ export default function App() {
   const [isOutlining, setIsOutlining] = useState(false);
   const [outlineError, setOutlineError] = useState<string | null>(null);
   const [outlineSuccess, setOutlineSuccess] = useState<string | null>(null);
+  const [outlineDownloads, setOutlineDownloads] = useState<DownloadItem[]>([]);
+  const [outlineResultName, setOutlineResultName] = useState('');
   const outlineInputRef = useRef<HTMLInputElement>(null);
 
   // ── Compare tab state ──
@@ -129,13 +204,13 @@ export default function App() {
     const valid: FileItem[] = [];
     for (let i = 0; i < uploaded.length; i++) {
       const f = uploaded[i];
-      const ext = f.name.split('.').pop()?.toLowerCase();
-      if (ext === 'pdf' || ext === 'ai') {
+      const ext = extensionOfName(f.name);
+      if (MERGE_EXTENSIONS.includes(ext)) {
         valid.push({ id: crypto.randomUUID(), file: f, name: f.name, size: f.size });
       }
     }
     if (valid.length === 0) {
-      setMergeError('PDF 또는 AI 파일만 추가할 수 있습니다.');
+      setMergeError('PDF, AI, 이미지, SVG 파일만 추가할 수 있습니다.');
       return;
     }
     setMergeFiles(prev => [...prev, ...valid]);
@@ -158,6 +233,11 @@ export default function App() {
     try {
       const merged = await PDFDocument.create();
       for (const item of mergeFiles) {
+        const ext = extensionOfName(item.name);
+        if (IMAGE_MERGE_EXTENSIONS.includes(ext)) {
+          await addImagePageToPdf(merged, item.file);
+          continue;
+        }
         const bytes = await item.file.arrayBuffer();
         const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
         const pages = await merged.copyPages(doc, doc.getPageIndices());
@@ -205,6 +285,8 @@ export default function App() {
     setOutlineName(f.name.substring(0, f.name.lastIndexOf('.')) || f.name);
     setOutlineError(null);
     setOutlineSuccess(null);
+    setOutlineDownloads([]);
+    setOutlineResultName('');
   };
 
   const handleOutlineDrop = (e: React.DragEvent) => {
@@ -237,7 +319,8 @@ export default function App() {
         });
 
         if (result.success) {
-          setOutlineSuccess(`로컬 저장 완료: ${saveDir}`);
+          setOutlineDownloads([]);
+          setOutlineSuccess(`로컬 저장 완료: ${saveDir}. 인쇄용 AI는 대지 손상 위험이 있어 생성하지 않았습니다.`);
           setOutlineFile(null);
           setOutlineName('');
         } else {
@@ -266,7 +349,6 @@ export default function App() {
 
         const result = await response.json();
         if (result.success) {
-          // Trigger browser file download from base64 string
           const byteCharacters = atob(result.fileData);
           const byteNumbers = new Array(byteCharacters.length);
           for (let i = 0; i < byteCharacters.length; i++) {
@@ -275,29 +357,30 @@ export default function App() {
           const byteArray = new Uint8Array(byteNumbers);
           const outlinedBlob = new Blob([byteArray], { type: 'application/pdf' });
           const originalBlob = outlineFile;
-          
           const baseName = outlineName.trim() || result.originalName || '출력문서';
-          
-          const downloadFile = (blob: Blob, filename: string) => {
-            return new Promise<void>((resolve) => {
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = filename;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
-              setTimeout(resolve, 300); // 300ms delay to prevent browser blocking multiple downloads
-            });
-          };
 
-          await downloadFile(originalBlob, `(원본)${baseName}.ai`);
-          await downloadFile(originalBlob, `(원본)${baseName}.pdf`);
-          await downloadFile(outlinedBlob, `(인쇄용)${baseName}.pdf`);
-          await downloadFile(outlinedBlob, `(인쇄용)${baseName}.ai`);
+          const originalExt = extensionOfName(outlineFile.name);
+          const downloads: DownloadItem[] = [
+            {
+              id: crypto.randomUUID(),
+              label: '원본 파일',
+              fileName: `(원본)${baseName}.${originalExt || 'pdf'}`,
+              blob: originalBlob,
+              note: '업로드한 원본 그대로 저장합니다.',
+            },
+            {
+              id: crypto.randomUUID(),
+              label: '인쇄용 PDF',
+              fileName: `(인쇄용)${baseName}.pdf`,
+              blob: outlinedBlob,
+              note: '폰트를 아웃라인 처리한 안전한 인쇄용 파일입니다.',
+              emphasis: true,
+            },
+          ];
 
-          setOutlineSuccess(`웹 아웃라인 문서 4종이 다운로드 폴더로 저장되었습니다! 파일명: ${baseName}`);
+          setOutlineDownloads(downloads);
+          setOutlineResultName(baseName);
+          setOutlineSuccess(`변환이 완료되었습니다. 필요한 파일을 개별로 받거나 ZIP으로 한 번에 받을 수 있습니다.`);
           setOutlineFile(null);
           setOutlineName('');
         } else {
@@ -318,6 +401,22 @@ export default function App() {
     { tab: 'compare', label: 'PDF 비교' },
     { tab: 'illustrator', label: '일러스트 뷰어' },
   ];
+
+  const downloadOutlineItem = (item: DownloadItem) => {
+    downloadBlob(item.blob, item.fileName);
+  };
+
+  const downloadOutlineZip = async () => {
+    if (outlineDownloads.length === 0) return;
+    const zip = new JSZip();
+    outlineDownloads.forEach(item => zip.file(item.fileName, item.blob));
+    zip.file(
+      'README.txt',
+      '인쇄용 AI는 대지 손상 위험이 있어 생성하지 않았습니다. 인쇄용 파일은 (인쇄용).pdf를 사용해주세요.\n'
+    );
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    downloadBlob(zipBlob, `${outlineResultName || '인쇄용_변환_결과'}.zip`);
+  };
 
   return (
     <div className="min-h-screen bg-[#f7f4ec] text-gray-900 flex flex-col" style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}>
@@ -450,12 +549,12 @@ export default function App() {
           >
             <Upload className="w-5 h-5 text-gray-300" />
             <p className="text-sm text-gray-400">파일을 드래그하거나 클릭하여 추가</p>
-            <p className="text-xs text-gray-300">.pdf · .ai</p>
+            <p className="text-xs text-gray-300">.pdf · .ai · .png · .jpg · .webp · .gif · .bmp · .svg</p>
             <input
               ref={mergeInputRef}
               type="file"
               multiple
-              accept=".pdf,.ai"
+              accept=".pdf,.ai,.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,image/*"
               className="hidden"
               onChange={e => addMergeFiles(e.target.files)}
             />
@@ -482,15 +581,17 @@ export default function App() {
               </div>
               <ul className="divide-y divide-gray-50">
                 {mergeFiles.map((f, idx) => {
-                  const isAi = f.name.toLowerCase().endsWith('.ai');
+                  const ext = extensionOfName(f.name);
+                  const isAi = ext === 'ai';
+                  const isPdf = ext === 'pdf';
                   return (
                     <motion.li key={f.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                       className="flex items-center px-4 py-3 gap-3 group hover:bg-gray-50/50 transition-colors">
                       <span className="text-xs text-gray-300 w-5 text-right flex-shrink-0">{idx + 1}</span>
                       <span className={cn(
                         'text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0',
-                        isAi ? 'bg-orange-50 text-orange-500' : 'bg-blue-50 text-blue-500'
-                      )}>{isAi ? 'AI' : 'PDF'}</span>
+                        isAi ? 'bg-orange-50 text-orange-500' : isPdf ? 'bg-blue-50 text-blue-500' : 'bg-emerald-50 text-emerald-600'
+                      )}>{isAi ? 'AI' : isPdf ? 'PDF' : ext.toUpperCase()}</span>
                       <span className="flex-1 text-sm text-gray-700 truncate">{f.name}</span>
                       <span className="text-xs text-gray-300 font-mono flex-shrink-0">{formatSize(f.size)}</span>
                       <button onClick={() => setMergeFiles(p => p.filter(x => x.id !== f.id))}
@@ -604,31 +705,54 @@ export default function App() {
             {outlineSuccess && (
               <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
                 className="border border-gray-100 rounded-xl overflow-hidden">
-                <div className="bg-gray-50/50 px-5 py-4 flex items-center gap-3 border-b border-gray-100">
+                <div className="bg-gray-50/50 px-5 py-4 flex flex-wrap items-center gap-3 border-b border-gray-100">
                   <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                  <span className="text-sm font-medium text-gray-800">변환 완료</span>
-                </div>
-                <div className="px-5 py-4 space-y-2">
-                  <div className="flex items-center gap-2 text-xs text-gray-400 mb-3">
-                    <FolderOpen className="w-3.5 h-3.5" />
-                    <span className="font-mono truncate">{outlineSuccess}</span>
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-semibold text-gray-800">변환 완료</span>
+                    <p className="mt-1 text-xs text-gray-400">{outlineSuccess}</p>
                   </div>
-                  {['(원본)', '(인쇄용)'].flatMap(prefix =>
-                    ['.ai', '.pdf'].map(ext => (
-                      <div key={prefix + ext} className="flex items-center gap-2 text-sm text-gray-600">
-                        <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
-                        <span className={cn('font-mono text-xs', prefix === '(인쇄용)' ? 'text-gray-800 font-semibold' : 'text-gray-500')}>
-                          {prefix}{outlineName}{ext}
-                        </span>
-                        {prefix === '(인쇄용)' && (
-                          <span className="ml-auto text-[10px] bg-orange-50 text-orange-500 px-1.5 py-0.5 rounded font-medium">아웃라인</span>
-                        )}
-                      </div>
-                    ))
+                  {outlineDownloads.length > 0 && (
+                    <button
+                      onClick={() => void downloadOutlineZip()}
+                      className="flex items-center gap-2 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-gray-700"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      전체 ZIP 다운로드
+                    </button>
                   )}
                 </div>
+                <div className="px-5 py-4 space-y-3">
+                  {outlineDownloads.length > 0 ? outlineDownloads.map(item => (
+                    <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-100 bg-white px-3 py-3">
+                      <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className={cn('truncate text-xs font-semibold', item.emphasis ? 'text-gray-900' : 'text-gray-600')}>
+                          {item.fileName}
+                        </p>
+                        <p className="mt-1 text-[11px] text-gray-400">{item.note}</p>
+                      </div>
+                      {item.emphasis && (
+                        <span className="rounded bg-orange-50 px-2 py-1 text-[10px] font-semibold text-orange-500">아웃라인</span>
+                      )}
+                      <button
+                        onClick={() => downloadOutlineItem(item)}
+                        className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 transition hover:bg-gray-50"
+                      >
+                        다운로드
+                      </button>
+                    </div>
+                  )) : (
+                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      <span className="font-mono truncate">{outlineSuccess}</span>
+                    </div>
+                  )}
+                  <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                    인쇄용 AI는 PDF를 AI 확장자로 바꾸면 Illustrator에서 대지가 합쳐지거나 깨질 수 있어 생성하지 않습니다. 인쇄용 결과는 PDF를 사용해주세요.
+                  </div>
+                </div>
                 <div className="px-5 py-3 border-t border-gray-50 flex justify-end">
-                  <button onClick={() => setOutlineSuccess(null)}
+                  <button onClick={() => { setOutlineSuccess(null); setOutlineDownloads([]); }}
                     className="text-xs text-gray-400 hover:text-gray-700 transition-colors font-medium">
                     닫기
                   </button>
