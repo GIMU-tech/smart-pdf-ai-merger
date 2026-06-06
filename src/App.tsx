@@ -320,7 +320,7 @@ export default function App() {
 
         if (result.success) {
           setOutlineDownloads([]);
-          setOutlineSuccess(`로컬 저장 완료: ${saveDir}. 인쇄용 AI는 대지 손상 위험이 있어 생성하지 않았습니다.`);
+          setOutlineSuccess(`로컬 저장 완료: ${saveDir}. 인쇄용 AI는 Illustrator 대지 인식을 돕기 위한 PDF 기반 호환 파일입니다.`);
           setOutlineFile(null);
           setOutlineName('');
         } else {
@@ -368,19 +368,34 @@ export default function App() {
               blob: originalBlob,
               note: '업로드한 원본 그대로 저장합니다.',
             },
+            ...(originalExt !== 'pdf' ? [{
+              id: crypto.randomUUID(),
+              label: '원본 PDF',
+              fileName: `(원본)${baseName}.pdf`,
+              blob: originalBlob,
+              note: 'Illustrator/PDF 호환 워크플로우용 원본 PDF 사본입니다.',
+            }] : []),
             {
               id: crypto.randomUUID(),
               label: '인쇄용 PDF',
               fileName: `(인쇄용)${baseName}.pdf`,
               blob: outlinedBlob,
-              note: '폰트를 아웃라인 처리한 안전한 인쇄용 파일입니다.',
+              note: '페이지 박스를 유지하고 폰트를 아웃라인 처리한 인쇄용 PDF입니다.',
+              emphasis: true,
+            },
+            {
+              id: crypto.randomUUID(),
+              label: '인쇄용 AI 호환',
+              fileName: `(인쇄용)${baseName}.ai`,
+              blob: outlinedBlob,
+              note: 'Illustrator가 대지로 인식하기 쉽도록 만든 PDF 기반 AI 호환 파일입니다.',
               emphasis: true,
             },
           ];
 
           setOutlineDownloads(downloads);
           setOutlineResultName(baseName);
-          setOutlineSuccess(`변환이 완료되었습니다. 필요한 파일을 개별로 받거나 ZIP으로 한 번에 받을 수 있습니다.`);
+          setOutlineSuccess(`변환이 완료되었습니다. 인쇄용 AI는 Illustrator 대지 인식을 돕기 위한 PDF 기반 호환 파일입니다.`);
           setOutlineFile(null);
           setOutlineName('');
         } else {
@@ -412,7 +427,7 @@ export default function App() {
     outlineDownloads.forEach(item => zip.file(item.fileName, item.blob));
     zip.file(
       'README.txt',
-      '인쇄용 AI는 대지 손상 위험이 있어 생성하지 않았습니다. 인쇄용 파일은 (인쇄용).pdf를 사용해주세요.\n'
+      '인쇄용 AI는 네이티브 AI가 아니라 Illustrator 대지 인식을 돕기 위한 PDF 기반 호환 파일입니다.\n파일별 Illustrator 해석 차이가 있을 수 있으니 최종 인쇄 전 (인쇄용).pdf와 함께 확인해주세요.\n'
     );
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     downloadBlob(zipBlob, `${outlineResultName || '인쇄용_변환_결과'}.zip`);
@@ -748,7 +763,7 @@ export default function App() {
                     </div>
                   )}
                   <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
-                    인쇄용 AI는 PDF를 AI 확장자로 바꾸면 Illustrator에서 대지가 합쳐지거나 깨질 수 있어 생성하지 않습니다. 인쇄용 결과는 PDF를 사용해주세요.
+                    인쇄용 AI는 Illustrator에서 대지 인식이 잘 되도록 페이지 박스를 유지한 PDF 기반 호환 파일입니다. 파일별 Illustrator 해석 차이가 있을 수 있으니 인쇄용 PDF와 함께 확인해주세요.
                   </div>
                 </div>
                 <div className="px-5 py-3 border-t border-gray-50 flex justify-end">

@@ -100,7 +100,9 @@ app.post('/process-outline', localUpload.single('file'), (req, res) => {
     '-dBATCH',
     '-sDEVICE=pdfwrite',
     '-dCompatibilityLevel=1.6',
+    '-dPDFSETTINGS=/prepress',
     '-dNoOutputFonts=true',
+    '-dUseCropBox',
     '-o', printPdfPath,
   ];
 

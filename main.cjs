@@ -76,7 +76,9 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
   // Define target output paths
   const originalExt = path.extname(filePath).toLowerCase() || '.pdf';
   const origPath = path.join(saveDirectory, `(원본)${cleanName}${originalExt}`);
+  const origPdfPath = path.join(saveDirectory, `(원본)${cleanName}.pdf`);
   const printPdfPath = path.join(saveDirectory, `(인쇄용)${cleanName}.pdf`);
+  const printAiPath = path.join(saveDirectory, `(인쇄용)${cleanName}.ai`);
 
   try {
     // Check if Ghostscript exists
@@ -84,10 +86,13 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
       throw new Error(`변환 엔진(Ghostscript)을 찾을 수 없습니다. 경로: ${gsPath}`);
     }
 
-    // 1. Save the original file exactly as uploaded.
+    // 1. Save the original file exactly as uploaded, plus a PDF-compatible copy for print workflows.
     fs.copyFileSync(filePath, origPath);
+    if (originalExt !== '.pdf') {
+      fs.copyFileSync(filePath, origPdfPath);
+    }
 
-    // 2. Save the outlined print PDF. Do not rename this PDF as .ai because Illustrator artboards can break.
+    // 2. Save an outlined print PDF while preserving page boxes so Illustrator can treat pages as artboards.
     await new Promise((resolve, reject) => {
       execFile(gsPath, [
         '-I' + gsLibPath,
@@ -96,7 +101,9 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
         '-dBATCH',
         '-sDEVICE=pdfwrite',
         '-dCompatibilityLevel=1.6',
+        '-dPDFSETTINGS=/prepress',
         '-dNoOutputFonts=true',
+        '-dUseCropBox',
         filePath
       ], (err, stdout, stderr) => {
         if (err) {
@@ -108,13 +115,18 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
       });
     });
 
+    // 3. Provide an Illustrator-friendly .ai filename using the same PDF-based bytes.
+    fs.copyFileSync(printPdfPath, printAiPath);
+
     return {
       success: true,
       files: [
         path.basename(origPath),
+        ...(originalExt !== '.pdf' ? [path.basename(origPdfPath)] : []),
         path.basename(printPdfPath),
+        path.basename(printAiPath),
       ],
-      warning: '인쇄용 AI는 대지 손상 위험이 있어 생성하지 않았습니다. 인쇄용 PDF를 사용해주세요.',
+      warning: '인쇄용 AI는 Illustrator 대지 인식을 돕기 위한 PDF 기반 호환 파일입니다. 파일별 Illustrator 해석 차이가 있을 수 있습니다.',
     };
   } catch (error) {
     console.error('Processing failed:', error);
