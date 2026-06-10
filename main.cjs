@@ -4,6 +4,59 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const { Worker } = require('worker_threads');
 
+function findWindowsGhostscript() {
+  const roots = [
+    process.env.GHOSTSCRIPT_ROOT,
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'gs'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'gs'),
+  ].filter(Boolean);
+
+  const candidates = [];
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root)) continue;
+      const stat = fs.statSync(root);
+      if (stat.isFile()) {
+        candidates.push(root);
+        continue;
+      }
+      for (const dir of fs.readdirSync(root)) {
+        candidates.push(path.join(root, dir, 'bin', 'gswin64c.exe'));
+        candidates.push(path.join(root, dir, 'bin', 'gswin32c.exe'));
+      }
+    } catch (_) {}
+  }
+
+  return candidates
+    .filter(candidate => candidate && fs.existsSync(candidate))
+    .sort()
+    .reverse()[0] || null;
+}
+
+function resolveGhostscript() {
+  const embeddedPath = path.join(__dirname, 'bin', 'gs', 'bin', 'gswin64c.exe');
+  const embeddedLibPath = path.join(__dirname, 'bin', 'gs', 'lib');
+  const envPath = process.env.GHOSTSCRIPT_PATH;
+  const candidates = [
+    envPath,
+    embeddedPath,
+    process.platform === 'win32' ? findWindowsGhostscript() : null,
+    process.platform === 'win32' ? 'gswin64c.exe' : 'gs',
+  ].filter(Boolean);
+
+  const gsPath = candidates.find(candidate => !path.isAbsolute(candidate) || fs.existsSync(candidate));
+  const gsLibPath = fs.existsSync(embeddedLibPath)
+    ? embeddedLibPath
+    : (gsPath && path.isAbsolute(gsPath)
+        ? path.join(path.dirname(path.dirname(gsPath)), 'lib')
+        : '');
+
+  return {
+    gsPath,
+    gsLibPath: gsLibPath && fs.existsSync(gsLibPath) ? gsLibPath : ''
+  };
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -64,14 +117,7 @@ ipcMain.handle('select-directory', async () => {
 ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseName }) => {
   const cleanName = baseName.trim() || '문서';
 
-  // Resolve embedded Ghostscript paths (packaged vs dev mode)
-  const gsPath = app.isPackaged 
-    ? path.join(__dirname, 'bin', 'gs', 'bin', 'gswin64c.exe')
-    : path.join(__dirname, 'bin', 'gs', 'bin', 'gswin64c.exe');
-
-  const gsLibPath = app.isPackaged 
-    ? path.join(__dirname, 'bin', 'gs', 'lib')
-    : path.join(__dirname, 'bin', 'gs', 'lib');
+  const { gsPath, gsLibPath } = resolveGhostscript();
 
   // Define target output paths
   const originalExt = path.extname(filePath).toLowerCase() || '.pdf';
@@ -82,7 +128,7 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
 
   try {
     // Check if Ghostscript exists
-    if (!fs.existsSync(gsPath)) {
+    if (!gsPath || (path.isAbsolute(gsPath) && !fs.existsSync(gsPath))) {
       throw new Error(`변환 엔진(Ghostscript)을 찾을 수 없습니다. 경로: ${gsPath}`);
     }
 
@@ -94,8 +140,8 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
 
     // 2. Save an outlined print PDF while preserving page boxes so Illustrator can treat pages as artboards.
     await new Promise((resolve, reject) => {
-      execFile(gsPath, [
-        '-I' + gsLibPath,
+      const args = [
+        gsLibPath ? '-I' + gsLibPath : null,
         '-o', printPdfPath,
         '-dNOPAUSE',
         '-dBATCH',
@@ -105,7 +151,8 @@ ipcMain.handle('process-outline', async (event, { filePath, saveDirectory, baseN
         '-dNoOutputFonts=true',
         '-dUseCropBox',
         filePath
-      ], (err, stdout, stderr) => {
+      ].filter(Boolean);
+      execFile(gsPath, args, (err, stdout, stderr) => {
         if (err) {
           console.error('Ghostscript failed:', err, stderr);
           reject(new Error(`아웃라인 처리 실패: ${stderr || err.message}`));
@@ -141,13 +188,7 @@ ipcMain.handle('compare-pdfs', async (event, { fileA, fileB, sensitivity }) => {
       ? path.join(__dirname, 'workers', 'compare.worker.cjs')
       : path.join(__dirname, 'workers', 'compare.worker.cjs');
 
-    const gsPath = app.isPackaged 
-      ? path.join(__dirname, 'bin', 'gs', 'bin', 'gswin64c.exe')
-      : path.join(__dirname, 'bin', 'gs', 'bin', 'gswin64c.exe');
-
-    const gsLibPath = app.isPackaged 
-      ? path.join(__dirname, 'bin', 'gs', 'lib')
-      : path.join(__dirname, 'bin', 'gs', 'lib');
+    const { gsPath, gsLibPath } = resolveGhostscript();
 
     const worker = new Worker(workerPath, {
       workerData: { fileA, fileB, gsPath, gsLibPath, sensitivity }

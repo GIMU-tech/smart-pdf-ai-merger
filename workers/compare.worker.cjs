@@ -29,9 +29,15 @@ function diceSim(a, b) {
 }
 
 // Extract all numeric tokens and compare them strictly
+function numericTokens(s) {
+  return (String(s || '').match(/[-+]?\d[\d,]*(?:\.\d+)?/g) || [])
+    .map(n => Number(n.replace(/,/g, '')))
+    .filter(n => Number.isFinite(n));
+}
+
 function numericDiffers(a, b) {
-  const numsA = (a.match(/[\d.,]+/g) || []).map(n=>parseFloat(n.replace(/,/g,'')));
-  const numsB = (b.match(/[\d.,]+/g) || []).map(n=>parseFloat(n.replace(/,/g,'')));
+  const numsA = numericTokens(a);
+  const numsB = numericTokens(b);
   if (numsA.length !== numsB.length) return true;
   return numsA.some((v,i) => Math.abs(v - numsB[i]) > 1e-6);
 }
@@ -40,9 +46,106 @@ function compactText(s) {
   return (s || '').replace(/\s+/g, '').toUpperCase();
 }
 
+function isSpecLikeText(s) {
+  return /(PRICE|AMOUNT|TOTAL|QTY|SIZE|SPEC|DIM|WIDTH|HEIGHT|LENGTH|N\.?W|G\.?W|KG|KGS|G|MM|CM|M\b|EA|PCS|규격|치수|중량|무게|수량|가격|\d+[X*]\d+)/i.test(String(s || ''));
+}
+
 function isCodeLikeText(s) {
+  if (isSpecLikeText(s)) return false;
   const compact = compactText(s);
-  return compact.length >= 5 && /[A-Z]/.test(compact) && /\d/.test(compact);
+  return compact.length >= 5 &&
+    /[A-Z]/.test(compact) &&
+    /\d/.test(compact) &&
+    (/(MODEL|SKU|ITEM|CODE|품번|모델|제품|상품)/i.test(String(s || '')) || /^[A-Z]{1,6}[-_]?\d{3,}[A-Z0-9-]*$/i.test(compact));
+}
+
+function normalizedSemanticText(s) {
+  return String(s || '')
+    .replace(/\uFFFD/g, ' ')
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function semanticKey(s) {
+  return normalizedSemanticText(s)
+    .toUpperCase()
+    .replace(/[：]/g, ':')
+    .replace(/[–—]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripNumbers(s) {
+  return semanticKey(s)
+    .replace(/[-+]?\d[\d,]*(?:\.\d+)?/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function splitSemanticLabelValue(s) {
+  const key = semanticKey(s);
+  const colon = key.match(/^([^:]{1,32}):\s*(.+)$/);
+  if (colon) return { label: colon[1].trim(), value: colon[2].trim() };
+
+  const firstNumber = key.search(/[-+]?\d/);
+  if (firstNumber > 0) {
+    return {
+      label: key.slice(0, firstNumber).replace(/[-:：/]+$/g, '').trim(),
+      value: key.slice(firstNumber).trim()
+    };
+  }
+
+  const parts = key.split(/\s+/);
+  if (parts.length >= 2) {
+    return { label: parts[0], value: parts.slice(1).join(' ') };
+  }
+  return { label: key, value: '' };
+}
+
+function labelCompatible(a, b) {
+  const la = splitSemanticLabelValue(a).label;
+  const lb = splitSemanticLabelValue(b).label;
+  if (!la || !lb) return false;
+  if (la === lb) return true;
+  return diceSim(la, lb) >= 0.92;
+}
+
+function textMatchScore(a, b) {
+  const aa = semanticKey(a);
+  const bb = semanticKey(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 1;
+
+  const base = Math.max(diceSim(aa, bb), diceSim(compactText(aa), compactText(bb)));
+  const sameLabel = labelCompatible(aa, bb);
+  if (sameLabel) return Math.max(base, 0.985);
+
+  const patternA = stripNumbers(aa);
+  const patternB = stripNumbers(bb);
+  if (patternA && patternA === patternB && numericTokens(aa).length && numericTokens(bb).length) {
+    return Math.max(base, 0.98);
+  }
+
+  return base;
+}
+
+function shouldMatchText(a, b, threshold) {
+  if (textMatchScore(a, b) >= threshold) return true;
+  if (labelCompatible(a, b) && (numericTokens(a).length || numericTokens(b).length)) return true;
+  return false;
+}
+
+function diffTypeForText(before, after) {
+  if (isCodeLikeText(before) || isCodeLikeText(after)) {
+    return { type: 'code_changed', severity: 'critical' };
+  }
+  if (numericTokens(before).length || numericTokens(after).length) {
+    if (numericDiffers(before, after)) {
+      return { type: 'number_changed', severity: 'critical' };
+    }
+  }
+  return { type: 'text_modified', severity: 'high' };
 }
 
 // Post-process OCR text: fix common OCR errors, trim junk
@@ -86,6 +189,39 @@ function reviewCategoryForText(before, after) {
     severity: 'high',
     title: '주의/안내 문구 변경',
   };
+  return {
+    category: 'text',
+    severity: 'high',
+    title: '문구 변경',
+  };
+}
+
+function reviewCategoryForText(before, after) {
+  const text = `${before || ''} ${after || ''}`;
+  const compact = compactText(text);
+  if (isSpecLikeText(text) || isSpecLikeText(compact)) {
+    return {
+      category: 'spec',
+      severity: 'critical',
+      title: '규격/치수/중량/수량 변경',
+    };
+  }
+  if (/(MODEL|SKU|ITEM|CODE|품번|모델|제품|상품)/i.test(text) ||
+      /[A-Z]{1,6}[-_]?\d{3,}[A-Z0-9-]*/i.test(compact) ||
+      /\d{7,}/i.test(compact)) {
+    return {
+      category: 'identity',
+      severity: 'critical',
+      title: '제품 코드/모델명 변경',
+    };
+  }
+  if (/(주의|경고|반품|교환|조립|반드시|확인|WARNING|CAUTION|NOTICE|DANGER)/i.test(text)) {
+    return {
+      category: 'warning',
+      severity: 'high',
+      title: '주의/안내 문구 변경',
+    };
+  }
   return {
     category: 'text',
     severity: 'high',
@@ -203,7 +339,10 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
     const before = diff.textInfo.beforeStr || diff.before || '';
     const after = diff.textInfo.afterStr || '';
     const info = reviewCategoryForText(before, after);
-    const key = `${info.category}:${info.title}`;
+    const labelA = splitSemanticLabelValue(before).label;
+    const labelB = splitSemanticLabelValue(after).label;
+    const semanticLabel = labelA || labelB || stripNumbers(before || after).slice(0, 48);
+    const key = `${info.category}:${info.title}:${semanticLabel}`;
     if (!textGroups.has(key)) {
       textGroups.set(key, {
         ...info,
@@ -235,7 +374,9 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
       title: group.title,
       before,
       after,
-      desc,
+      desc: before && after
+        ? `${group.title} 정보가 변경되었습니다.`
+        : (after ? `${group.title} 정보가 추가되었습니다.` : `${group.title} 정보가 삭제되었습니다.`),
       bbox: unionBbox(group.boxes),
       relatedDiffs: group.relatedDiffs,
       confidence: group.confidence
@@ -267,7 +408,9 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
     const visualClusters = allVisualClusters
       .filter(cluster => {
         const rect = bboxToRect(cluster.rect);
-        return !textReviewBoxes.some(textRect => rectOverlapRatio(rect, textRect) > 0.45);
+        return !textReviewBoxes.some(textRect =>
+          rectOverlapRatio(rect, textRect) > 0.15 || rectGap(rect, textRect) < 24
+        );
       })
       .sort((a, b) => {
         const ar = bboxToRect(a.rect);
@@ -275,8 +418,25 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
         return (b.items.length * 10000 + Math.min(rectArea(br), pageSize.width * pageSize.height * 0.08)) -
                (a.items.length * 10000 + Math.min(rectArea(ar), pageSize.width * pageSize.height * 0.08));
       });
-    const primaryVisualClusters = visualClusters.slice(0, 16);
-    const remainingVisualClusters = visualClusters.slice(16);
+    let primaryVisualClusters = visualClusters.slice(0, 16);
+    let remainingVisualClusters = visualClusters.slice(16);
+    if (primaryVisualClusters.length > 1) {
+      const mergedRect = primaryVisualClusters
+        .map(cluster => bboxToRect(cluster.rect))
+        .reduce((acc, rect) => acc ? unionRect(acc, rect) : rect, null);
+      const mergedAreaRatio = mergedRect
+        ? rectArea(mergedRect) / Math.max(1, pageSize.width * pageSize.height)
+        : 1;
+      const mergedItemCount = primaryVisualClusters.reduce((sum, cluster) => sum + cluster.items.length, 0);
+      if (mergedRect && (mergedAreaRatio <= 0.12 || (primaryVisualClusters.length <= 4 && mergedItemCount <= 10))) {
+        primaryVisualClusters = [{
+          rect: rectToBbox(mergedRect),
+          items: primaryVisualClusters.flatMap(cluster => cluster.items),
+          score: primaryVisualClusters.reduce((sum, cluster) => sum + cluster.score, 0)
+        }];
+        remainingVisualClusters = visualClusters.slice(16);
+      }
+    }
 
     primaryVisualClusters.forEach((cluster, clusterIdx) => {
       const relatedDiffs = cluster.items.map(x => x.idx);
@@ -527,14 +687,45 @@ function isImageBlank(png) {
 // -----------------------------------------------------------------------------
 
 let _ocrWorker = null;
+let _ocrUnavailableReason = null;
+
+function isUsableTrainedData(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size < 1024 * 1024) return false;
+    const head = fs.readFileSync(filePath, { encoding: 'utf8', flag: 'r' }).slice(0, 80);
+    return !head.startsWith('version https://git-lfs.github.com/spec/');
+  } catch (_) {
+    return false;
+  }
+}
+
+function hasUsableOcrData(langPath) {
+  return isUsableTrainedData(path.join(langPath, 'kor.traineddata')) &&
+    isUsableTrainedData(path.join(langPath, 'eng.traineddata'));
+}
+
 async function getOCRWorker() {
+  if (_ocrUnavailableReason) return null;
   if (!_ocrWorker) {
     const localLangPath = path.join(__dirname, '..');
-    _ocrWorker = await createWorker('kor+eng', OEM.LSTM_ONLY, {
-      langPath: localLangPath,
-      cachePath: localLangPath,
-      gzip: false
-    });
+    if (!hasUsableOcrData(localLangPath)) {
+      _ocrUnavailableReason = `OCR traineddata is missing or not downloaded from Git LFS: ${localLangPath}`;
+      console.warn(`[Worker] ${_ocrUnavailableReason}`);
+      return null;
+    }
+    try {
+      _ocrWorker = await createWorker('kor+eng', OEM.LSTM_ONLY, {
+        langPath: localLangPath,
+        cachePath: localLangPath,
+        gzip: false
+      });
+    } catch (err) {
+      _ocrUnavailableReason = err?.message || 'OCR worker failed to initialize';
+      console.warn(`[Worker] OCR disabled: ${_ocrUnavailableReason}`);
+      _ocrWorker = null;
+      return null;
+    }
   }
   return _ocrWorker;
 }
@@ -618,8 +809,8 @@ function detectGeo(png, minSide, textList = [], contentBox = null) {
       for (const t of textList) {
         const ix1 = Math.max(r.x, t.x);
         const iy1 = Math.max(r.y, t.y);
-        const ix2 = Math.min(r.x + r.w, t.x + t.w);
-        const iy2 = Math.min(r.y + r.h, t.y + t.h);
+          const ix2 = Math.min(r.x + r.width, t.x + t.w);
+          const iy2 = Math.min(r.y + r.height, t.y + t.h);
         if (ix2 > ix1 && iy2 > iy1) {
           const interArea = (ix2 - ix1) * (iy2 - iy1);
           const rArea = r.width * r.height;
@@ -739,6 +930,9 @@ async function run() {
     const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs').catch(()=>require('pdfjs-dist/legacy/build/pdf.js'));
     const { default: pixelmatch } = await import('pixelmatch');
     const { fileA, fileB, gsPath, gsLibPath, sensitivity } = workerData;
+    if (!gsPath || (path.isAbsolute(gsPath) && !fs.existsSync(gsPath))) {
+      throw new Error(`Ghostscript executable not found: ${gsPath || '(empty)'}`);
+    }
 
     // Load PDF-lib Documents for page boxes extraction
     let pdfDocA = null, pdfDocB = null;
@@ -749,7 +943,7 @@ async function run() {
     function renderVectorRegion(filePath, p, x_pdf, y_pdf, w_pt, h_pt, targetDPI, outPath) {
       return new Promise((res, rej) => {
         execFile(gsPath, [
-          '-I' + gsLibPath, '-dSAFER', '-dBATCH', '-dNOPAUSE',
+          gsLibPath ? '-I' + gsLibPath : null, '-dSAFER', '-dBATCH', '-dNOPAUSE',
           '-sDEVICE=png16m', `-r${targetDPI}`,
           `-dFirstPage=${p}`, `-dLastPage=${p}`,
           `-dDEVICEWIDTHPOINTS=${w_pt}`,
@@ -758,7 +952,7 @@ async function run() {
           '-dFIXEDMEDIA',
           '-c', `<</PageOffset [-${x_pdf} -${y_pdf}]>> setpagedevice`,
           `-sOutputFile=${outPath}`, filePath
-        ], err => err ? rej(err) : res());
+        ].filter(Boolean), err => err ? rej(err) : res());
       });
     }
 
@@ -808,13 +1002,19 @@ async function run() {
     const p = precision / 100.0;
     
     // Smooth interpolations for all detection parameters (1% - 100%)
-    const minGeo = Math.max(1, Math.round(10 - 9 * p));
+    const pxPerPt = DPI / 72;
+    const minGeoPt = Math.max(0.5, 4.0 - 3.5 * p);
+    const minGeo = Math.max(1, Math.round(minGeoPt * pxPerPt));
     const geoTol = Math.max(0.05, parseFloat((5.0 - 4.95 * p).toFixed(3)));
     const textSim = Math.max(0.85, parseFloat((0.85 + 0.14 * p).toFixed(3)));
     const visTol = Math.max(0.001, parseFloat((0.1 - 0.099 * p).toFixed(4)));
     const ocrConf = Math.max(25, Math.round(70 - 45 * p));
+    const minVisualPx = Math.max(2, Math.round((precision >= 90 ? 0.45 : 0.8) * pxPerPt));
+    const minVisualAreaPx = Math.max(9, minVisualPx * minVisualPx);
+    const minVisualDensity = precision >= 90 ? 0.01 : 0.018;
+    const pageEdgePx = Math.max(4, Math.round(2 * pxPerPt));
 
-    const M = { minGeo, geoTol, textSim, visTol, ocrConf };
+    const M = { minGeo, geoTol, textSim, visTol, ocrConf, minVisualPx, minVisualAreaPx, minVisualDensity, pageEdgePx };
 
     // ⚙⚙ Initialise OCR ⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙⚙
     // Will be lazily initialized if a page contains no native text
@@ -849,25 +1049,25 @@ async function run() {
       const cores = Math.min(4, os.cpus().length || 1);
       return new Promise((res, rej) =>
         execFile(gsPath, [
-          '-I' + gsLibPath, '-dSAFER', '-dBATCH', '-dNOPAUSE',
+          gsLibPath ? '-I' + gsLibPath : null, '-dSAFER', '-dBATCH', '-dNOPAUSE',
           '-sDEVICE=png16m', `-r${DPI}`,
           '-dUseCropBox',
           `-dNumRenderingThreads=${cores}`,
           '-dBufferSpace=1000000000', // 1GB buffer space for speed
           `-sOutputFile=${outPattern}`, filePath
-        ], err => err ? rej(err) : res())
+        ].filter(Boolean), err => err ? rej(err) : res())
       );
     }
 
     function renderOcrPage(filePath, pageNum, outPath, ocrDpi) {
       return new Promise((res, rej) =>
         execFile(gsPath, [
-          '-I' + gsLibPath, '-dSAFER', '-dBATCH', '-dNOPAUSE',
+          gsLibPath ? '-I' + gsLibPath : null, '-dSAFER', '-dBATCH', '-dNOPAUSE',
           '-sDEVICE=png16m', `-r${ocrDpi}`,
           '-dUseCropBox',
           `-dFirstPage=${pageNum}`, `-dLastPage=${pageNum}`,
           `-sOutputFile=${outPath}`, filePath
-        ], err => err ? rej(err) : res())
+        ].filter(Boolean), err => err ? rej(err) : res())
       );
     }
 
@@ -1327,7 +1527,10 @@ async function run() {
               let hasShapes = shapesA.length > 0 || shapesB.length > 0;
 
               if (hasText) {
-                sim = diceSim(textA, textB);
+                sim = textMatchScore(textA, textB);
+                if (labelCompatible(textA, textB) && (numericTokens(textA).length || numericTokens(textB).length)) {
+                  sim = Math.max(sim, 0.92);
+                }
               } else if (hasShapes) {
                 let matchedShapes = 0;
                 const usedShapesB = new Set();
@@ -1493,10 +1696,10 @@ async function run() {
               const by = minR * G;
               const bw = Math.min(localW - bx, (maxC - minC + 1) * G);
               const bh = Math.min(localH - by, (maxR - minR + 1) * G);
-              if (bw < 3 || bh < 3) continue;
+              if (bw < M.minVisualPx || bh < M.minVisualPx || bw * bh < M.minVisualAreaPx) continue;
 
               const density = pixDiffRatio(localA.data, localB.data, localW, bx, by, bw, bh);
-              if (density < 0.015) continue;
+              if (density < M.minVisualDensity) continue;
 
               const isLargeConnectedRegion = bw > 360 || bh > 360 || bw * bh > 180000;
               if (isLargeConnectedRegion) {
@@ -1508,7 +1711,7 @@ async function run() {
                     const th = Math.min(tileH, by + bh - ty);
                     if (tw < 24 || th < 24) continue;
                     const tileDensity = pixDiffRatio(localA.data, localB.data, localW, tx, ty, tw, th);
-                    if (tileDensity < 0.018) continue;
+                    if (tileDensity < M.minVisualDensity) continue;
                     regions.push({
                       type: 'design_changed',
                       severity: 'low',
@@ -1604,25 +1807,22 @@ async function run() {
             for (let k = 0; k < textsB.length; k++) {
               if (matchedTextB.has(k)) continue;
               const tb = textsB[k];
-              const sim = Math.max(diceSim(ta.str, tb.str), diceSim(compactText(ta.str), compactText(tb.str)));
+              const sim = textMatchScore(ta.str, tb.str);
               if (sim > bestSim) {
                 bestSim = sim;
                 bestB = k;
               }
             }
 
-            if (bestB >= 0 && bestSim >= M.textSim) {
+            if (bestB >= 0 && shouldMatchText(ta.str, textsB[bestB].str, M.textSim)) {
               matchedTextB.add(bestB);
               const tb = textsB[bestB];
 
               // Check content changes (text strings)
-              const compareA = (isCodeLikeText(ta.str) || isCodeLikeText(tb.str)) ? compactText(ta.str) : ta.str;
-              const compareB = (isCodeLikeText(ta.str) || isCodeLikeText(tb.str)) ? compactText(tb.str) : tb.str;
+              const compareA = normalizedSemanticText(ta.str);
+              const compareB = normalizedSemanticText(tb.str);
               if (compareA !== compareB) {
-                const hasNum = /\d/.test(compareA) || /\d/.test(compareB);
-                const numDiff = hasNum ? numericDiffers(compareA, compareB) : false;
-                const type = numDiff ? 'number_changed' : 'text_modified';
-                const severity = numDiff ? 'critical' : 'high';
+                const { type, severity } = diffTypeForText(compareA, compareB);
                 const diffParts = diffLib.diffChars(compareA, compareB);
                 const diffsArray = diffParts.map(part => [part.removed ? -1 : part.added ? 1 : 0, part.value]);
 
@@ -1826,8 +2026,8 @@ async function run() {
         const matchThresh = Math.max(0.01, parseFloat((0.10 - 0.09 * p).toFixed(3)));
         pixelmatch(imgA.data, imgB.data, diffPng.data, W, H, { threshold: matchThresh, alpha: 0.5 });
 
-        const G = sensitivity === 'ultra' ? 10 : 18;
-        const edgeStrip = 8;
+        const G = precision >= 90 ? 10 : 18;
+        const edgeStrip = M.pageEdgePx;
         const useContentLimit = contentBoxA && contentBoxA.w > 0 && contentBoxA.h > 0;
         const minX = useContentLimit ? Math.max(edgeStrip, contentBoxA.x) : edgeStrip;
         const minY = useContentLimit ? Math.max(edgeStrip, contentBoxA.y) : edgeStrip;
@@ -1860,12 +2060,12 @@ async function run() {
               }
             }
             const bx=minC*G,by=minR*G,bw=(maxC-minC+1)*G,bh=(maxR-minR+1)*G;
-            if(bw<2||bh<2) continue;
+            if(bw < M.minVisualPx || bh < M.minVisualPx || bw * bh < M.minVisualAreaPx) continue;
             // Intentionally NOT calling overlapHandled() — background colour
             // changes share the same bbox as already-handled text.
             const dr=pixDiffRatio(imgA.data,imgB.data,W,bx,by,bw,bh);
             // Skip pure anti-aliasing edge noise (pixel change density < 1.5%)
-            if(dr<0.015) continue;
+            if(dr < M.minVisualDensity) continue;
             diffs.push({
               type:'design_changed', severity:'low',
               desc:`이미지/아이콘 변경 (${Math.round(bw)}×${Math.round(bh)} px, Δ${Math.round(dr*100)}%)`,

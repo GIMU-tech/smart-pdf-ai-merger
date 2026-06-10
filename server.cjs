@@ -29,13 +29,60 @@ setInterval(() => {
 // Configure Multer for secure temporary file uploads
 const upload = multer({ dest: os.tmpdir() });
 
-// Resolve Ghostscript and MuPDF path dynamically (embedded vs system-wide for Docker/Linux)
-const isWindows = process.platform === 'win32';
-const localGsPath = path.join(__dirname, 'bin', 'gs', 'bin', 'gswin64c.exe');
-const localGsLibPath = path.join(__dirname, 'bin', 'gs', 'lib');
+function findWindowsGhostscript() {
+  const roots = [
+    process.env.GHOSTSCRIPT_ROOT,
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'gs'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'gs'),
+  ].filter(Boolean);
 
-const gsPath = fs.existsSync(localGsPath) ? localGsPath : 'gs';
-const gsLibPath = fs.existsSync(localGsLibPath) ? localGsLibPath : '';
+  const candidates = [];
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root)) continue;
+      const stat = fs.statSync(root);
+      if (stat.isFile()) {
+        candidates.push(root);
+        continue;
+      }
+      for (const dir of fs.readdirSync(root)) {
+        candidates.push(path.join(root, dir, 'bin', 'gswin64c.exe'));
+        candidates.push(path.join(root, dir, 'bin', 'gswin32c.exe'));
+      }
+    } catch (_) {}
+  }
+
+  return candidates
+    .filter(candidate => candidate && fs.existsSync(candidate))
+    .sort()
+    .reverse()[0] || null;
+}
+
+// Resolve Ghostscript dynamically (embedded, env override, system install, then PATH).
+function resolveGhostscript() {
+  const embeddedPath = path.join(__dirname, 'bin', 'gs', 'bin', 'gswin64c.exe');
+  const embeddedLibPath = path.join(__dirname, 'bin', 'gs', 'lib');
+  const candidates = [
+    process.env.GHOSTSCRIPT_PATH,
+    embeddedPath,
+    process.platform === 'win32' ? findWindowsGhostscript() : null,
+    process.platform === 'win32' ? 'gswin64c.exe' : 'gs',
+  ].filter(Boolean);
+
+  const resolvedPath = candidates.find(candidate => !path.isAbsolute(candidate) || fs.existsSync(candidate));
+  const resolvedLibPath = fs.existsSync(embeddedLibPath)
+    ? embeddedLibPath
+    : (resolvedPath && path.isAbsolute(resolvedPath)
+        ? path.join(path.dirname(path.dirname(resolvedPath)), 'lib')
+        : '');
+
+  return {
+    gsPath: resolvedPath,
+    gsLibPath: resolvedLibPath && fs.existsSync(resolvedLibPath) ? resolvedLibPath : ''
+  };
+}
+
+const { gsPath, gsLibPath } = resolveGhostscript();
 
 console.log(`[API Server] Using Ghostscript path: ${gsPath}`);
 if (gsLibPath) {
@@ -89,7 +136,7 @@ app.post('/process-outline', localUpload.single('file'), (req, res) => {
   const printPdfPath = path.join(tempDir, `(인쇄용)${cleanName}_${Date.now()}.pdf`);
 
   // Check if Ghostscript exists (either local or system-wide)
-  if (gsPath !== 'gs' && !fs.existsSync(gsPath)) {
+  if (!gsPath || (path.isAbsolute(gsPath) && !fs.existsSync(gsPath))) {
     try { fs.unlinkSync(filePath); } catch (_) {}
     return res.status(500).json({ success: false, error: '변환 엔진(Ghostscript)이 준비되지 않았습니다.' });
   }

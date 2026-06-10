@@ -71,6 +71,7 @@ type CompareMode = 'ai' | 'visual';
 // ─── Severity / Type Metadata ─────────────────────────────────────────────────────
 const META: Record<string, { label: string; color: string; ring: string; bg: string }> = {
   number_changed: { label: 'CRITICAL', color: 'text-rose-600', ring: '#e11d48', bg: 'rgba(225,29,72,' },
+  code_changed: { label: 'CRITICAL', color: 'text-rose-600', ring: '#e11d48', bg: 'rgba(225,29,72,' },
   text_modified: { label: 'HIGH', color: 'text-orange-600', ring: '#ea580c', bg: 'rgba(234,88,12,' },
   layout_changed: { label: 'HIGH', color: 'text-blue-600', ring: '#2563eb', bg: 'rgba(37,99,235,' },
   shape_resized: { label: 'MEDIUM', color: 'text-purple-600', ring: '#9333ea', bg: 'rgba(147,51,234,' },
@@ -97,8 +98,25 @@ const REVIEW_SEVERITY_LABEL: Record<string, string> = {
   low: '참고',
 };
 
+const REVIEW_META_DISPLAY: Record<ReviewItem['category'], { label: string; icon: typeof Hash; color: string; bg: string }> = {
+  identity: { label: '식별 정보', icon: Hash, color: 'text-rose-700', bg: 'bg-rose-50 border-rose-100' },
+  spec: { label: '규격/수치', icon: Type, color: 'text-orange-700', bg: 'bg-orange-50 border-orange-100' },
+  warning: { label: '주의 문구', icon: AlertCircle, color: 'text-amber-700', bg: 'bg-amber-50 border-amber-100' },
+  text: { label: '문구', icon: Type, color: 'text-blue-700', bg: 'bg-blue-50 border-blue-100' },
+  drawing: { label: '도면/이미지', icon: ImageIcon, color: 'text-purple-700', bg: 'bg-purple-50 border-purple-100' },
+  layout: { label: '레이아웃 참고', icon: MoveVertical, color: 'text-gray-600', bg: 'bg-gray-50 border-gray-200' },
+};
+
+const REVIEW_SEVERITY_LABEL_DISPLAY: Record<string, string> = {
+  critical: '필수',
+  high: '중요',
+  medium: '확인',
+  low: '참고',
+};
+
 function overlayShortLabel(diff: Diff) {
   if (diff.type === 'number_changed') return '값 변경';
+  if (diff.type === 'code_changed') return '코드 변경';
   if (diff.type === 'text_modified') return '문구 변경';
   if (diff.type === 'design_changed') return '도면 변화';
   if (diff.type === 'layout_changed') return '도형 변화';
@@ -1429,7 +1447,7 @@ export function CompareTab({
                         </div>
                       ) : (
                         filteredReviewItems.map((item, i) => {
-                          const m = REVIEW_META[item.category] || REVIEW_META.layout;
+                          const m = REVIEW_META_DISPLAY[item.category] || REVIEW_META_DISPLAY.layout;
                           const Icon = m.icon;
                           const rawIdx = item.relatedDiffs?.[0] ?? -1;
                           const isChecked = !!checkedItems[getReviewCheckedKey(item, i)];
@@ -1453,7 +1471,7 @@ export function CompareTab({
                                   <div className="min-w-0">
                                     <div className="flex items-center gap-1.5">
                                       <span className={cn("text-[8px] font-black px-1.5 py-0.5 rounded-full border", m.bg, m.color)}>
-                                        {REVIEW_SEVERITY_LABEL[item.severity] || item.severity}
+                                        {REVIEW_SEVERITY_LABEL_DISPLAY[item.severity] || item.severity}
                                       </span>
                                       <span className="text-[8px] font-bold text-gray-400">{m.label}</span>
                                     </div>
