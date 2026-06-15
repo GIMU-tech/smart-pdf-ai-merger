@@ -60,6 +60,12 @@ type PageResult = {
   base64B: string;
 };
 
+function getReviewDisplayBbox(item: ReviewItem, page?: PageResult | null) {
+  const rawIndex = item.primaryDiffIndex ?? item.relatedDiffs?.[0] ?? null;
+  const rawBox = rawIndex != null && rawIndex >= 0 ? page?.diffs?.[rawIndex]?.bbox : undefined;
+  return item.bbox || rawBox;
+}
+
 // Visual-only pages. In vector mode each src is a single-page PDF blob URL.
 type VisualPage = {
   page: number;
@@ -164,7 +170,7 @@ function renderInlineDiff(diffs: Array<[number, string]> | undefined, originalTe
 
 function ReviewCropPreview({ page, item }: { page: PageResult; item: ReviewItem }) {
   const [preview, setPreview] = useState<{ before: string; after: string } | null>(null);
-  const box = item.bbox;
+  const box = getReviewDisplayBbox(item, page);
   const shouldPreview = item.category === 'drawing' && !!box && !!page.base64A && !!page.base64B;
 
   useEffect(() => {
@@ -228,10 +234,44 @@ function ReviewCropPreview({ page, item }: { page: PageResult; item: ReviewItem 
   );
 }
 
-function DiffBox({ diff, scale, active, onHover, checked }: {
+function DiffBox({ diff, scale, active, onHover, checked, overlayRole = 'after' }: {
   diff: Diff; scale: number; active: boolean; onHover: (v: boolean) => void; checked: boolean; key?: any;
+  overlayRole?: 'before' | 'after';
 }) {
   const m = meta(diff.type);
+  if (overlayRole === 'before') {
+    const size = active ? 14 : 10;
+    return (
+      <div
+        onMouseEnter={() => onHover(true)}
+        onMouseLeave={() => onHover(false)}
+        className={cn(
+          "absolute cursor-help rounded-full border-2 border-white shadow-md transition-all duration-150",
+          checked ? "opacity-25" : "opacity-95"
+        )}
+        style={{
+          left: diff.bbox.x * scale + (diff.bbox.width * scale) / 2 - size / 2,
+          top: diff.bbox.y * scale + (diff.bbox.height * scale) / 2 - size / 2,
+          width: size,
+          height: size,
+          backgroundColor: m.ring,
+          boxShadow: active ? `0 0 0 5px ${m.ring}24, 0 0 14px ${m.ring}70` : `0 0 0 2px ${m.ring}20`,
+          zIndex: active ? 35 : 12
+        }}
+        title={diff.desc || overlayShortLabel(diff)}
+      >
+        {active && (
+          <div
+            className="absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[9px] font-black text-white shadow-lg"
+            style={{ backgroundColor: m.ring }}
+          >
+            {overlayShortLabel(diff)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       onMouseEnter={() => onHover(true)}
@@ -297,13 +337,14 @@ function DiffBox({ diff, scale, active, onHover, checked }: {
 }
 
 // ─── Single PDF Viewer Pane (supports crisp-edges 5000% zoom) ─────────────────
-function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, innerRef, zoom = 100, showDiffs = true, aspectRatio }: {
+function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, innerRef, zoom = 100, showDiffs = true, aspectRatio, overlayRole = 'after' }: {
   imgSrc: string; diffs: Diff[]; label: string; activeDiff: number | null;
   checkedItems: Record<string, boolean>; onScroll?: (e: React.UIEvent<HTMLDivElement>) => void;
   innerRef?: React.RefObject<HTMLDivElement | null>;
   zoom?: number;
   showDiffs?: boolean;
   aspectRatio?: number;
+  overlayRole?: 'before' | 'after';
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const [scale, setScale] = useState(1);
@@ -381,6 +422,7 @@ function PdfPane({ imgSrc, diffs, label, activeDiff, checkedItems, onScroll, inn
               active={hover === (d.rawIndex ?? i) || activeDiff === (d.rawIndex ?? i)}
               onHover={(v) => setHover(v ? (d.rawIndex ?? i) : null)}
               checked={!!checkedItems[d.rawIndex ?? i]}
+              overlayRole={overlayRole}
             />
           ))}
         </div>
@@ -688,25 +730,48 @@ export function CompareTab({
 
   const overlayDiffs = useMemo(() => {
     if (!currentResult) return [];
-    const include = new Set<number>();
 
     if (!showAllDiffOverlays) {
-      if (activeDiff != null && currentResult.diffs[activeDiff]) include.add(activeDiff);
-    } else if (severityFilteredReviewItems.length > 0) {
-      const sourceItems = hideCheckedReviewItems ? filteredReviewItems : severityFilteredReviewItems;
-      sourceItems.forEach(item => item.relatedDiffs?.forEach(idx => include.add(idx)));
-    } else {
-      currentResult.diffs.forEach((d, idx) => {
-        if ((d.severity === 'critical' && showCritical) ||
-            (d.severity === 'high' && showHigh) ||
-            (d.severity === 'medium' && showMedium) ||
-            (d.severity === 'low' && showLow)) include.add(idx);
-      });
+      return activeDiff != null && currentResult.diffs[activeDiff]
+        ? [{ ...currentResult.diffs[activeDiff], rawIndex: activeDiff }]
+        : [];
     }
 
-    return [...include]
-      .filter(idx => currentResult.diffs[idx])
-      .map(idx => ({ ...currentResult.diffs[idx], rawIndex: idx }));
+    if (severityFilteredReviewItems.length > 0) {
+      const sourceItems = hideCheckedReviewItems ? filteredReviewItems : severityFilteredReviewItems;
+      return sourceItems
+        .map(item => {
+          const rawIndex = item.primaryDiffIndex ?? item.relatedDiffs?.[0] ?? -1;
+          const fallback = rawIndex >= 0 ? currentResult.diffs[rawIndex] : null;
+          const bbox = getReviewDisplayBbox(item, currentResult) || fallback?.bbox;
+          if (!bbox) return null;
+          const type = item.category === 'spec' || item.category === 'identity'
+            ? 'number_changed'
+            : item.category === 'drawing'
+              ? 'design_changed'
+              : item.category === 'layout'
+                ? 'spacing_changed'
+                : 'text_modified';
+          return {
+            type,
+            severity: item.severity,
+            desc: item.title,
+            before: item.before,
+            bbox,
+            rawIndex
+          } as Diff;
+        })
+        .filter((diff): diff is Diff => !!diff);
+    }
+
+    return currentResult.diffs
+      .map((d, idx) => ({ ...d, rawIndex: idx }))
+      .filter(d =>
+        (d.severity === 'critical' && showCritical) ||
+        (d.severity === 'high' && showHigh) ||
+        (d.severity === 'medium' && showMedium) ||
+        (d.severity === 'low' && showLow)
+      );
   }, [currentResult, activeDiff, showAllDiffOverlays, severityFilteredReviewItems, filteredReviewItems, hideCheckedReviewItems, showCritical, showHigh, showMedium, showLow]);
 
   const goToDiff = (idx: number) => {
@@ -729,18 +794,19 @@ export function CompareTab({
   };
 
   const goToReviewItem = (item: ReviewItem, reviewIdx: number) => {
-    const rawIdx = item.relatedDiffs?.[0] ?? -1;
+    const rawIdx = item.primaryDiffIndex ?? item.relatedDiffs?.[0] ?? -1;
     setActiveDiff(rawIdx >= 0 ? rawIdx : null);
 
     if (viewMode === 'side') {
       const paneA = scrollRefA.current;
-      if (!paneA || !item.bbox) return;
+      const targetBox = getReviewDisplayBbox(item, currentResult);
+      if (!paneA || !targetBox) return;
       const imgEl = paneA.querySelector('img');
       if (!imgEl) return;
 
       const nat = imgEl.naturalWidth || 800;
       const scaleFactor = imgEl.clientWidth / nat;
-      const top = item.bbox.y * scaleFactor;
+      const top = targetBox.y * scaleFactor;
       paneA.scrollTo({ top: Math.max(0, top - 150), behavior: 'smooth' });
     }
   };
@@ -1476,7 +1542,7 @@ export function CompareTab({
                         filteredReviewItems.map((item, i) => {
                           const m = REVIEW_META[item.category] || REVIEW_META.layout;
                           const Icon = m.icon;
-                          const rawIdx = item.relatedDiffs?.[0] ?? -1;
+                          const rawIdx = item.primaryDiffIndex ?? item.relatedDiffs?.[0] ?? -1;
                           const isChecked = !!checkedItems[getReviewCheckedKey(item, i)];
                           const reviewKey = getReviewCheckedKey(item, i);
                           const isExpanded = !!expandedReviewItems[reviewKey];
@@ -1668,6 +1734,7 @@ export function CompareTab({
                     zoom={zoom}
                     showDiffs={!isVisualMode}
                     aspectRatio={currentVisualPage?.aspectA}
+                    overlayRole="before"
                   />
                   
                   {/* Floating scroll lock indicator */}
@@ -1695,6 +1762,7 @@ export function CompareTab({
                     zoom={zoom}
                     showDiffs={!isVisualMode}
                     aspectRatio={currentVisualPage?.aspectB}
+                    overlayRole="after"
                   />
                 </div>
               )}

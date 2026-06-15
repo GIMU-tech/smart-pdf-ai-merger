@@ -48,6 +48,11 @@ function compactText(s) {
   return (s || '').replace(/\s+/g, '').toUpperCase();
 }
 
+function comparableTextKey(s) {
+  return compactText(String(s || '').normalize('NFKC'))
+    .replace(/[^\w\uAC00-\uD7A3*().,-]/g, '');
+}
+
 function isCodeLikeText(s) {
   const compact = compactText(s);
   return compact.length >= 5 && /[A-Z]/.test(compact) && /\d/.test(compact);
@@ -266,8 +271,39 @@ function normalizeDiffsForReview(diffs, context = {}) {
     return diff;
   });
 
+  const duplicateTextPairIndices = new Set();
+  const deletedText = [];
+  const addedText = [];
+  promoted.forEach((diff, idx) => {
+    if (!diff?.textInfo) return;
+    const before = diff.textInfo.beforeStr || diff.before || '';
+    const after = diff.textInfo.afterStr || '';
+    const beforeKey = comparableTextKey(before);
+    const afterKey = comparableTextKey(after);
+    if (beforeKey && !afterKey) deletedText.push({ diff, idx, key: beforeKey, rect: bboxToRect(diff.bbox) });
+    if (!beforeKey && afterKey) addedText.push({ diff, idx, key: afterKey, rect: bboxToRect(diff.bbox) });
+  });
+  const usedAddedText = new Set();
+  for (const deleted of deletedText) {
+    let best = null;
+    let bestGap = Infinity;
+    for (const added of addedText) {
+      if (usedAddedText.has(added.idx) || added.key !== deleted.key) continue;
+      const gap = rectGap(deleted.rect, added.rect);
+      if (gap < bestGap) {
+        best = added;
+        bestGap = gap;
+      }
+    }
+    if (best && bestGap <= 120) {
+      duplicateTextPairIndices.add(deleted.idx);
+      duplicateTextPairIndices.add(best.idx);
+      usedAddedText.add(best.idx);
+    }
+  }
+
   const textRects = promoted
-    .filter(diff => diff.textInfo && !isLikelyOcrNoiseDiff(diff))
+    .filter((diff, idx) => !duplicateTextPairIndices.has(idx) && diff.textInfo && !isLikelyOcrNoiseDiff(diff))
     .map(diff => expandRect(bboxToRect(diff.bbox), 14));
   const movedRects = promoted
     .filter(diff => diff.type === 'block_moved')
@@ -276,7 +312,12 @@ function normalizeDiffsForReview(diffs, context = {}) {
     (context.normalization && (Math.abs(context.normalization.offsetX || 0) > 2 || Math.abs(context.normalization.offsetY || 0) > 2));
 
   const keep = [];
-  for (const diff of promoted) {
+  for (const [idx, diff] of promoted.entries()) {
+    if (duplicateTextPairIndices.has(idx)) {
+      suppress(diff);
+      continue;
+    }
+
     if (isLikelyOcrNoiseDiff(diff)) {
       suppress(diff);
       continue;
@@ -286,12 +327,12 @@ function normalizeDiffsForReview(diffs, context = {}) {
       const rect = bboxToRect(diff.bbox);
       const pageArea = Math.max(1, (context.pageSize?.width || 1) * (context.pageSize?.height || 1));
       const areaRatio = rectArea(rect) / pageArea;
-      const overlapsText = textRects.some(textRect => rectOverlapRatio(rect, textRect) > 0.05);
-      const overlapsMoved = movedRects.some(moveRect => rectOverlapRatio(rect, moveRect) > 0.18);
-      if (textRects.length > 0 && areaRatio < 0.025) {
+      if ((diff.type === 'shape_modified' || diff.type === 'layout_changed') && areaRatio > 0.12) {
         suppress(diff);
         continue;
       }
+      const overlapsText = textRects.some(textRect => rectOverlapRatio(rect, textRect) > 0.05);
+      const overlapsMoved = movedRects.some(moveRect => rectOverlapRatio(rect, moveRect) > 0.18);
       if (overlapsText || overlapsMoved) {
         suppress(diff);
         continue;
@@ -584,9 +625,11 @@ function buildHumanReviewSummaryV2(page, diffs, pageSize, normalization, suppres
     textReviewBoxes.push(bboxToRect(bbox));
   }
 
-  const visualDiffs = diffs
+  const allVisualDiffs = diffs
     .map((diff, idx) => ({ diff, idx }))
     .filter(({ diff }) => VISUAL_DIFF_TYPES.has(diff.type));
+  const designVisualDiffs = allVisualDiffs.filter(({ diff }) => diff.type === 'design_changed');
+  const visualDiffs = designVisualDiffs.length >= 3 ? designVisualDiffs : allVisualDiffs;
   const detailedVisualDiffs = visualDiffs.filter(({ diff }) => {
     const rect = bboxToRect(diff.bbox);
     const areaRatio = rectArea(rect) / Math.max(1, pageSize.width * pageSize.height);
@@ -1771,7 +1814,7 @@ async function run() {
           pastePng(cropA, localA);
           pastePng(cropB, localB);
 
-          const maxExactPixels = precision >= 90 ? 2400000 : 1800000;
+          const maxExactPixels = precision >= 90 ? 5200000 : 3600000;
           if (localW * localH > maxExactPixels) {
             const ratio = sampledDiffRatio(localA.data, localB.data, localW, 0, 0, localW, localH, precision >= 90 ? 3 : 5);
             if (ratio < 0.02) return [];
