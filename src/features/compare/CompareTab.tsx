@@ -25,6 +25,15 @@ type Diff = {
   };
 };
 
+type ReviewDetail = {
+  label: string;
+  before?: string;
+  after?: string;
+  desc?: string;
+  severity?: 'critical' | 'high' | 'medium' | 'low' | string;
+  relatedDiffs?: number[];
+};
+
 type ReviewItem = {
   id: string;
   category: 'identity' | 'spec' | 'warning' | 'text' | 'drawing' | 'layout';
@@ -36,6 +45,10 @@ type ReviewItem = {
   bbox?: { x: number; y: number; width: number; height: number };
   relatedDiffs?: number[];
   confidence?: number;
+  details?: ReviewDetail[];
+  diffTypeCounts?: Record<string, number>;
+  suppressedCount?: number;
+  primaryDiffIndex?: number | null;
 };
 
 type PageResult = {
@@ -529,6 +542,7 @@ export function CompareTab({
   const [showSidebar, setShowSidebar] = useState(true);
   const [showAllDiffOverlays, setShowAllDiffOverlays] = useState(true);
   const [hideCheckedReviewItems, setHideCheckedReviewItems] = useState(true);
+  const [expandedReviewItems, setExpandedReviewItems] = useState<Record<string, boolean>>({});
   const [blendMode, setBlendMode] = useState<'difference' | 'normal'>('difference');
 
   // Visual-only pages (for 육안 검수 mode)
@@ -731,6 +745,37 @@ export function CompareTab({
     }
   };
 
+  const goToRawDiff = (rawIdx: number) => {
+    if (!currentResult || rawIdx < 0) return;
+    const diff = currentResult.diffs[rawIdx];
+    if (!diff) return;
+    setActiveDiff(rawIdx);
+
+    if (viewMode === 'side') {
+      const paneA = scrollRefA.current;
+      if (!paneA) return;
+      const imgEl = paneA.querySelector('img');
+      if (!imgEl) return;
+
+      const nat = imgEl.naturalWidth || 800;
+      const scaleFactor = imgEl.clientWidth / nat;
+      const top = diff.bbox.y * scaleFactor;
+      paneA.scrollTo({ top: Math.max(0, top - 150), behavior: 'smooth' });
+    }
+  };
+
+  const diffTypeLabel = (type: string) => {
+    if (type === 'number_changed') return '숫자';
+    if (type === 'text_modified') return '문구';
+    if (type === 'layout_changed') return '레이아웃';
+    if (type === 'shape_resized') return '크기';
+    if (type === 'shape_modified') return '도형';
+    if (type === 'design_changed') return '시각';
+    if (type === 'spacing_changed') return '대지';
+    if (type === 'block_moved') return '이동';
+    return type;
+  };
+
   function getCheckedKey(diffIdx: number) {
     if (!currentResult) return '';
     return `${currentResult.page}_${diffIdx}`;
@@ -782,7 +827,7 @@ export function CompareTab({
     setCmp(true);
     setCompareStartedAt(Date.now());
     setCompareStage(isVisualMode ? 'PDF 렌더링 준비 중' : 'PDF 업로드 준비 중');
-    setError(null); setRes(null); setVisualPages(null); setVisualPdfUrls(null); setCurrentPageIdx(0); setCheckedItems({});
+    setError(null); setRes(null); setVisualPages(null); setVisualPdfUrls(null); setCurrentPageIdx(0); setCheckedItems({}); setExpandedReviewItems({});
 
     try {
       if (isVisualMode) {
@@ -1433,6 +1478,10 @@ export function CompareTab({
                           const Icon = m.icon;
                           const rawIdx = item.relatedDiffs?.[0] ?? -1;
                           const isChecked = !!checkedItems[getReviewCheckedKey(item, i)];
+                          const reviewKey = getReviewCheckedKey(item, i);
+                          const isExpanded = !!expandedReviewItems[reviewKey];
+                          const detailCount = item.details?.length || 0;
+                          const typeEntries = Object.entries(item.diffTypeCounts || {});
                           return (
                             <div
                               key={item.id || i}
@@ -1460,17 +1509,30 @@ export function CompareTab({
                                     <p className="text-[11px] text-gray-900 font-black leading-snug mt-1">{item.title}</p>
                                   </div>
                                 </div>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const key = getReviewCheckedKey(item, i);
-                                    setCheckedItems(prev => ({ ...prev, [key]: !prev[key] }));
-                                    if (rawIdx >= 0 && activeDiff === rawIdx) setActiveDiff(null);
-                                  }}
-                                  className="p-0.5 hover:bg-gray-100 rounded-lg transition-all text-gray-400 hover:text-gray-700 cursor-pointer"
-                                >
-                                  {isChecked ? <CheckSquare className="w-3.5 h-3.5 text-emerald-500" /> : <Square className="w-3.5 h-3.5 text-gray-400" />}
-                                </button>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setExpandedReviewItems(prev => ({ ...prev, [reviewKey]: !prev[reviewKey] }));
+                                    }}
+                                    className="p-0.5 hover:bg-gray-100 rounded-lg transition-all text-gray-400 hover:text-gray-700 cursor-pointer"
+                                    title={isExpanded ? '상세 접기' : '상세 보기'}
+                                  >
+                                    <ChevronRight className={cn("w-3.5 h-3.5 transition-transform", isExpanded && "rotate-90")} />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const key = getReviewCheckedKey(item, i);
+                                      setCheckedItems(prev => ({ ...prev, [key]: !prev[key] }));
+                                      if (rawIdx >= 0 && activeDiff === rawIdx) setActiveDiff(null);
+                                    }}
+                                    className="p-0.5 hover:bg-gray-100 rounded-lg transition-all text-gray-400 hover:text-gray-700 cursor-pointer"
+                                    title={isChecked ? '검수 완료 해제' : '검수 완료'}
+                                  >
+                                    {isChecked ? <CheckSquare className="w-3.5 h-3.5 text-emerald-500" /> : <Square className="w-3.5 h-3.5 text-gray-400" />}
+                                  </button>
+                                </div>
                               </div>
 
                               <p className="text-[10px] text-gray-700 font-semibold leading-relaxed break-words">
@@ -1483,6 +1545,70 @@ export function CompareTab({
                                 <div className="grid gap-1 text-[9px] font-mono">
                                   {item.before && <div className="bg-rose-50 border border-rose-100 text-rose-700 rounded px-2 py-1 truncate">Before: {item.before}</div>}
                                   {item.after && <div className="bg-emerald-50 border border-emerald-100 text-emerald-700 rounded px-2 py-1 truncate">After: {item.after}</div>}
+                                </div>
+                              )}
+
+                              {isExpanded && (
+                                <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 space-y-2">
+                                  <div className="flex flex-wrap gap-1">
+                                    {typeEntries.map(([type, count]) => (
+                                      <span key={type} className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[8px] font-black text-gray-500">
+                                        {diffTypeLabel(type)} {count}
+                                      </span>
+                                    ))}
+                                    {!!item.suppressedCount && (
+                                      <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[8px] font-black text-emerald-700">
+                                        중복 묶음 {item.suppressedCount}
+                                      </span>
+                                    )}
+                                    {detailCount === 0 && (
+                                      <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[8px] font-black text-gray-400">
+                                        상세 근거 없음
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {!!detailCount && (
+                                    <div className="space-y-1.5">
+                                      {item.details!.map((detail, detailIdx) => {
+                                        const targetIdx = detail.relatedDiffs?.[0] ?? -1;
+                                        return (
+                                          <div key={`${reviewKey}_detail_${detailIdx}`} className="rounded-md border border-gray-200 bg-white p-2">
+                                            <div className="flex items-start justify-between gap-2">
+                                              <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5">
+                                                  <span className="text-[8px] font-black text-gray-500">{detail.label}</span>
+                                                  {detail.severity && (
+                                                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[8px] font-bold text-gray-500">
+                                                      {REVIEW_SEVERITY_LABEL[detail.severity] || detail.severity}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                {detail.desc && <p className="mt-1 text-[9px] font-semibold leading-snug text-gray-600 break-words">{detail.desc}</p>}
+                                              </div>
+                                              {targetIdx >= 0 && (
+                                                <button
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    goToRawDiff(targetIdx);
+                                                  }}
+                                                  className="flex-shrink-0 rounded-md border border-gray-200 bg-gray-50 px-1.5 py-1 text-[8px] font-black text-gray-500 hover:bg-gray-100"
+                                                >
+                                                  위치
+                                                </button>
+                                              )}
+                                            </div>
+                                            {(detail.before || detail.after) && (
+                                              <div className="mt-1.5 grid gap-1 text-[8px] font-mono">
+                                                {detail.before && <div className="truncate rounded bg-rose-50 px-1.5 py-0.5 text-rose-700">B: {detail.before}</div>}
+                                                {detail.after && <div className="truncate rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">A: {detail.after}</div>}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
                                 </div>
                               )}
 

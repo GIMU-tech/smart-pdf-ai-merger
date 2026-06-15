@@ -28,10 +28,18 @@ function diceSim(a, b) {
   return (2*h)/(a.length+b.length-2);
 }
 
-// Extract all numeric tokens and compare them strictly
+// Extract all numeric tokens and compare them strictly.
+// Keep this stricter than a generic punctuation match so "12,000" stays one
+// token and OCR punctuation noise does not create false numeric changes.
+function numericTokens(s) {
+  return (String(s || '').match(/-?\d[\d,]*(?:\.\d+)?/g) || [])
+    .map(n => parseFloat(n.replace(/,/g, '')))
+    .filter(n => Number.isFinite(n));
+}
+
 function numericDiffers(a, b) {
-  const numsA = (a.match(/[\d.,]+/g) || []).map(n=>parseFloat(n.replace(/,/g,'')));
-  const numsB = (b.match(/[\d.,]+/g) || []).map(n=>parseFloat(n.replace(/,/g,'')));
+  const numsA = numericTokens(a);
+  const numsB = numericTokens(b);
   if (numsA.length !== numsB.length) return true;
   return numsA.some((v,i) => Math.abs(v - numsB[i]) > 1e-6);
 }
@@ -43,6 +51,32 @@ function compactText(s) {
 function isCodeLikeText(s) {
   const compact = compactText(s);
   return compact.length >= 5 && /[A-Z]/.test(compact) && /\d/.test(compact);
+}
+
+function hasNumericChange(before, after) {
+  return (numericTokens(before).length > 0 || numericTokens(after).length > 0) &&
+    numericDiffers(before, after);
+}
+
+function isLikelyOcrNoiseText(s) {
+  const text = String(s || '').trim();
+  if (!text) return true;
+  const compact = text.replace(/\s+/g, '');
+  if (compact.length <= 2) return true;
+  if (compact.length <= 4 && !/[A-Za-z0-9\uAC00-\uD7A3]/.test(compact)) return true;
+  const useful = (compact.match(/[A-Za-z0-9\uAC00-\uD7A3]/g) || []).length;
+  const symbolRatio = 1 - (useful / Math.max(1, compact.length));
+  if (compact.length <= 5 && symbolRatio > 0.35) return true;
+  if (/^[^\w\uAC00-\uD7A3]*[rIl1|]{1,3}[^\w\uAC00-\uD7A3]*$/i.test(compact)) return true;
+  return false;
+}
+
+function isLikelyOcrNoiseDiff(diff) {
+  if (!diff || !diff.textInfo) return false;
+  const before = diff.textInfo.beforeStr || diff.before || '';
+  const after = diff.textInfo.afterStr || '';
+  if (hasNumericChange(before, after)) return false;
+  return isLikelyOcrNoiseText(before) || isLikelyOcrNoiseText(after);
 }
 
 // Post-process OCR text: fix common OCR errors, trim junk
@@ -134,6 +168,15 @@ function rectOverlapRatio(a, b) {
   return overlap / Math.max(1, Math.min(rectArea(a), rectArea(b)));
 }
 
+function expandRect(rect, pad) {
+  return {
+    x: rect.x - pad,
+    y: rect.y - pad,
+    w: rect.w + pad * 2,
+    h: rect.h + pad * 2
+  };
+}
+
 function clusterDiffsByRegion(items, pageSize, options = {}) {
   const maxGap = options.maxGap ?? Math.max(36, Math.min(pageSize.width, pageSize.height) * 0.035);
   const maxClusterAreaRatio = options.maxClusterAreaRatio ?? 0.18;
@@ -179,15 +222,112 @@ function clusterDiffsByRegion(items, pageSize, options = {}) {
     .sort((a, b) => b.score - a.score);
 }
 
-function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
+const VISUAL_DIFF_TYPES = new Set(['layout_changed', 'shape_resized', 'shape_modified', 'design_changed']);
+
+function diffTypeCountsFor(indices, diffs) {
+  return indices.reduce((acc, idx) => {
+    const type = diffs[idx]?.type || 'unknown';
+    acc[type] = (acc[type] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function detailForTextDiff(diff, idx) {
+  const before = diff.textInfo?.beforeStr || diff.before || '';
+  const after = diff.textInfo?.afterStr || '';
+  const numeric = hasNumericChange(before, after);
+  const info = numeric
+    ? { title: '숫자/금액 변경', severity: 'critical' }
+    : reviewCategoryForText(before, after);
+  return {
+    label: info.title,
+    before,
+    after,
+    desc: diff.desc || (before && after ? `${before} -> ${after}` : (after ? `${after} 추가` : `${before} 삭제`)),
+    severity: numeric ? 'critical' : (diff.severity || info.severity || 'high'),
+    relatedDiffs: [idx]
+  };
+}
+
+function normalizeDiffsForReview(diffs, context = {}) {
+  const suppressedByType = {};
+  const suppress = (diff) => {
+    const type = diff?.type || 'unknown';
+    suppressedByType[type] = (suppressedByType[type] || 0) + 1;
+  };
+
+  const promoted = diffs.map(diff => {
+    if (!diff?.textInfo) return diff;
+    const before = diff.textInfo.beforeStr || diff.before || '';
+    const after = diff.textInfo.afterStr || '';
+    if (hasNumericChange(before, after)) {
+      return { ...diff, type: 'number_changed', severity: 'critical' };
+    }
+    return diff;
+  });
+
+  const textRects = promoted
+    .filter(diff => diff.textInfo && !isLikelyOcrNoiseDiff(diff))
+    .map(diff => expandRect(bboxToRect(diff.bbox), 14));
+  const movedRects = promoted
+    .filter(diff => diff.type === 'block_moved')
+    .map(diff => bboxToRect(diff.bbox));
+  const hasPageShift = promoted.some(diff => diff.type === 'spacing_changed') ||
+    (context.normalization && (Math.abs(context.normalization.offsetX || 0) > 2 || Math.abs(context.normalization.offsetY || 0) > 2));
+
+  const keep = [];
+  for (const diff of promoted) {
+    if (isLikelyOcrNoiseDiff(diff)) {
+      suppress(diff);
+      continue;
+    }
+
+    if (VISUAL_DIFF_TYPES.has(diff.type)) {
+      const rect = bboxToRect(diff.bbox);
+      const pageArea = Math.max(1, (context.pageSize?.width || 1) * (context.pageSize?.height || 1));
+      const areaRatio = rectArea(rect) / pageArea;
+      const overlapsText = textRects.some(textRect => rectOverlapRatio(rect, textRect) > 0.05);
+      const overlapsMoved = movedRects.some(moveRect => rectOverlapRatio(rect, moveRect) > 0.18);
+      if (textRects.length > 0 && areaRatio < 0.025) {
+        suppress(diff);
+        continue;
+      }
+      if (overlapsText || overlapsMoved) {
+        suppress(diff);
+        continue;
+      }
+      if (context.pageTextSame && hasPageShift) {
+        suppress(diff);
+        continue;
+      }
+    }
+
+    if (diff.type === 'text_modified' && context.pageTextSame && hasPageShift) {
+      suppress(diff);
+      continue;
+    }
+
+    keep.push(diff);
+  }
+
+  const suppressedCount = Object.values(suppressedByType).reduce((sum, count) => sum + count, 0);
+  return { diffs: keep, suppression: { suppressedCount, suppressedByType } };
+}
+
+function buildHumanReviewSummary(page, diffs, pageSize, normalization, suppression = {}) {
   const reviewItems = [];
   const textReviewBoxes = [];
   let id = 1;
   const addItem = (item) => {
+    const relatedDiffs = item.relatedDiffs || [];
     reviewItems.push({
       id: `p${page}-r${id++}`,
       confidence: item.confidence ?? 0.75,
-      relatedDiffs: item.relatedDiffs || [],
+      relatedDiffs,
+      primaryDiffIndex: item.primaryDiffIndex ?? relatedDiffs[0] ?? null,
+      diffTypeCounts: item.diffTypeCounts || diffTypeCountsFor(relatedDiffs, diffs),
+      suppressedCount: item.suppressedCount || 0,
+      details: item.details || [],
       ...item
     });
   };
@@ -361,6 +501,206 @@ function buildHumanReviewSummary(page, diffs, pageSize, normalization) {
         counts.warning ? '주의 문구' : '',
         counts.text ? '문구' : '',
         counts.drawing ? '도면/일러스트' : '',
+        counts.layout ? '레이아웃 참고' : ''
+      ].filter(Boolean).join(', ') + ' 변경';
+
+  return { reviewItems, pageSummary };
+}
+
+function buildHumanReviewSummaryV2(page, diffs, pageSize, normalization, suppression = {}) {
+  const reviewItems = [];
+  const textReviewBoxes = [];
+  let id = 1;
+  const addItem = (item) => {
+    const relatedDiffs = item.relatedDiffs || [];
+    reviewItems.push({
+      id: `p${page}-r${id++}`,
+      confidence: item.confidence ?? 0.75,
+      relatedDiffs,
+      primaryDiffIndex: item.primaryDiffIndex ?? relatedDiffs[0] ?? null,
+      diffTypeCounts: item.diffTypeCounts || diffTypeCountsFor(relatedDiffs, diffs),
+      suppressedCount: item.suppressedCount || 0,
+      details: item.details || [],
+      ...item
+    });
+  };
+
+  const cleanCandidate = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const joinCandidates = (values) => [...new Set(values.map(cleanCandidate).filter(Boolean))]
+    .slice(0, 6)
+    .join(' / ');
+  const textGroups = new Map();
+
+  diffs.forEach((diff, idx) => {
+    if (!diff.textInfo) return;
+    const before = diff.textInfo.beforeStr || diff.before || '';
+    const after = diff.textInfo.afterStr || '';
+    const numeric = hasNumericChange(before, after);
+    const info = numeric
+      ? { category: 'spec', severity: 'critical', title: '숫자/금액 변경' }
+      : reviewCategoryForText(before, after);
+    const key = `${info.category}:${info.title}`;
+    if (!textGroups.has(key)) {
+      textGroups.set(key, {
+        ...info,
+        beforeValues: [],
+        afterValues: [],
+        boxes: [],
+        relatedDiffs: [],
+        details: [],
+        confidence: numeric ? 0.96 : 0.82
+      });
+    }
+    const group = textGroups.get(key);
+    if (before) group.beforeValues.push(before);
+    if (after) group.afterValues.push(after);
+    if (diff.bbox) group.boxes.push({ bbox: diff.bbox });
+    group.relatedDiffs.push(idx);
+    group.details.push(detailForTextDiff(diff, idx));
+    if (numeric || diff.type === 'number_changed') {
+      group.severity = 'critical';
+      group.confidence = Math.max(group.confidence, 0.96);
+    }
+  });
+
+  for (const group of textGroups.values()) {
+    const before = joinCandidates(group.beforeValues);
+    const after = joinCandidates(group.afterValues);
+    const bbox = unionBbox(group.boxes);
+    addItem({
+      category: group.category,
+      severity: group.severity,
+      title: group.title,
+      before,
+      after,
+      desc: before && after
+        ? `${group.title} 정보가 변경되었습니다.`
+        : (after ? `새 ${group.title} 정보가 추가되었습니다.` : `${group.title} 정보가 삭제되었습니다.`),
+      bbox,
+      relatedDiffs: group.relatedDiffs,
+      details: group.details,
+      confidence: group.confidence
+    });
+    textReviewBoxes.push(bboxToRect(bbox));
+  }
+
+  const visualDiffs = diffs
+    .map((diff, idx) => ({ diff, idx }))
+    .filter(({ diff }) => VISUAL_DIFF_TYPES.has(diff.type));
+  const detailedVisualDiffs = visualDiffs.filter(({ diff }) => {
+    const rect = bboxToRect(diff.bbox);
+    const areaRatio = rectArea(rect) / Math.max(1, pageSize.width * pageSize.height);
+    return areaRatio <= 0.08;
+  });
+  const movedDiffs = diffs
+    .map((diff, idx) => ({ diff, idx }))
+    .filter(({ diff }) => diff.type === 'block_moved');
+  const spacingDiffs = diffs
+    .map((diff, idx) => ({ diff, idx }))
+    .filter(({ diff }) => diff.type === 'spacing_changed');
+
+  const visualClusters = clusterDiffsByRegion(detailedVisualDiffs.length >= 3 ? detailedVisualDiffs : visualDiffs, pageSize)
+    .filter(cluster => cluster.items.length >= 2 || rectArea(bboxToRect(cluster.rect)) > 900)
+    .filter(cluster => {
+      const rect = bboxToRect(cluster.rect);
+      return !textReviewBoxes.some(textRect => rectOverlapRatio(rect, textRect) > 0.35);
+    })
+    .sort((a, b) => {
+      const ar = bboxToRect(a.rect);
+      const br = bboxToRect(b.rect);
+      return (b.items.length * 10000 + Math.min(rectArea(br), pageSize.width * pageSize.height * 0.08)) -
+             (a.items.length * 10000 + Math.min(rectArea(ar), pageSize.width * pageSize.height * 0.08));
+    });
+
+  visualClusters.slice(0, 8).forEach((cluster, clusterIdx) => {
+    const relatedDiffs = cluster.items.map(x => x.idx);
+    const itemCount = relatedDiffs.length;
+    addItem({
+      category: 'drawing',
+      severity: itemCount >= 8 ? 'high' : 'medium',
+      title: visualClusters.length === 1 ? '도면/이미지 변경' : `도면/이미지 변경 ${clusterIdx + 1}`,
+      desc: `가까운 시각 변화 ${itemCount}건을 하나의 확인 지점으로 묶었습니다.`,
+      bbox: cluster.rect,
+      relatedDiffs,
+      details: cluster.items.slice(0, 6).map(x => ({
+        label: x.diff.type === 'shape_resized' ? '도형 크기 변경' : '시각 요소 변경',
+        desc: x.diff.desc || '시각 요소 변경 후보입니다.',
+        severity: x.diff.severity || 'medium',
+        relatedDiffs: [x.idx]
+      })),
+      suppressedCount: Math.max(0, itemCount - Math.min(itemCount, 6)),
+      confidence: 0.78
+    });
+  });
+
+  if (movedDiffs.length) {
+    const relatedDiffs = movedDiffs.map(x => x.idx);
+    const bbox = unionBbox(movedDiffs.map(x => x.diff));
+    addItem({
+      category: 'layout',
+      severity: 'low',
+      title: '블록 위치 이동',
+      desc: `같거나 유사한 콘텐츠 블록의 위치 이동 ${movedDiffs.length}건입니다.`,
+      bbox,
+      relatedDiffs,
+      details: movedDiffs.map(x => ({
+        label: '블록 이동',
+        desc: x.diff.desc || '콘텐츠 블록 위치가 이동했습니다.',
+        severity: x.diff.severity || 'low',
+        relatedDiffs: [x.idx]
+      })),
+      confidence: 0.68
+    });
+  }
+
+  if (spacingDiffs.length || (normalization && (Math.abs(normalization.offsetX || 0) > 2 || Math.abs(normalization.offsetY || 0) > 2))) {
+    const relatedDiffs = spacingDiffs.map(x => x.idx);
+    const bbox = spacingDiffs.length ? unionBbox(spacingDiffs.map(x => x.diff)) : { x: 0, y: 0, width: pageSize.width, height: 24 };
+    addItem({
+      category: 'layout',
+      severity: 'low',
+      title: '페이지/대지 위치 이동',
+      desc: '전체 대지 또는 주요 콘텐츠가 기준 위치에서 이동했습니다. 내용 변경보다는 레이아웃 참고 항목으로 확인하세요.',
+      bbox,
+      relatedDiffs,
+      suppressedCount: suppression.suppressedCount || 0,
+      details: [
+        ...spacingDiffs.map(x => ({
+          label: '대지 위치 이동',
+          desc: x.diff.desc || '페이지 기준 위치가 이동했습니다.',
+          severity: x.diff.severity || 'low',
+          relatedDiffs: [x.idx]
+        })),
+        ...((suppression.suppressedCount || 0) > 0 ? [{
+          label: '중복 후보 묶음',
+          desc: `중복 시각 후보 ${suppression.suppressedCount}건은 같은 이동/텍스트 변경으로 묶었습니다.`,
+          severity: 'low',
+          relatedDiffs: []
+        }] : [])
+      ],
+      confidence: 0.7
+    });
+  }
+
+  const priority = { critical: 0, high: 1, medium: 2, low: 3 };
+  const categoryPriority = { spec: 0, identity: 1, warning: 2, text: 3, drawing: 4, layout: 5 };
+  reviewItems.sort((a, b) =>
+    (priority[a.severity] ?? 9) - (priority[b.severity] ?? 9) ||
+    (categoryPriority[a.category] ?? 9) - (categoryPriority[b.category] ?? 9)
+  );
+
+  const counts = reviewItems.reduce((acc, item) => {
+    acc[item.category] = (acc[item.category] || 0) + 1;
+    return acc;
+  }, {});
+  const pageSummary = reviewItems.length === 0
+    ? '변경 없음'
+    : [
+        counts.spec ? '숫자/규격' : '',
+        counts.identity ? '제품 식별 정보' : '',
+        counts.warning ? '주의 문구' : '',
+        counts.text ? '문구' : '',
+        counts.drawing ? '도면/이미지' : '',
         counts.layout ? '레이아웃 참고' : ''
       ].filter(Boolean).join(', ') + ' 변경';
 
@@ -885,7 +1225,7 @@ async function run() {
     }
 
     for (let p=1; p<=maxPages; p++) {
-      const diffs  = [];
+      let diffs  = [];
       const tA     = nativeA[p-1] || [];
       const tB_orig= nativeB[p-1] || [];
       const pA = path.join(tempDir, `a${p}.png`);
@@ -899,6 +1239,7 @@ async function run() {
       let s_x = 1.0, s_y = 1.0, t_x = 0.0, t_y = 0.0;
       let imgA = null, imgB = null;
       let origDataA = null, origDataB = null;
+      let pageTextSame = false;
 
       if (!hasA && !hasB) continue;
       if (hasA && !hasB) {
@@ -1201,6 +1542,8 @@ async function run() {
         // Group individual native text items into logical lines for accurate comparison
         const linesA = groupTextIntoLines(tA);
         const linesB = groupTextIntoLines(tB);
+        pageTextSame = compactText(linesA.map(line => line.str).join(' ')) ===
+          compactText(linesB.map(line => line.str).join(' '));
 
         ocrLinesA.splice(0, ocrLinesA.length, ...dedupeOcrAgainstNative(ocrLinesA, linesA));
         ocrLinesB.splice(0, ocrLinesB.length, ...dedupeOcrAgainstNative(ocrLinesB, linesB));
@@ -1895,11 +2238,18 @@ async function run() {
         requestedDPI,
         effectiveDPI: DPI
       } : null;
-      const humanReview = buildHumanReviewSummary(
+      const normalized = normalizeDiffsForReview(diffs, {
+        normalization,
+        pageTextSame,
+        pageSize: { width: imgA?.width || imgB?.width || 1, height: imgA?.height || imgB?.height || 1 }
+      });
+      diffs = normalized.diffs;
+      const humanReview = buildHumanReviewSummaryV2(
         p,
         diffs,
         { width: imgA?.width || imgB?.width || 1, height: imgA?.height || imgB?.height || 1 },
-        normalization
+        normalization,
+        normalized.suppression
       );
       results.push({
         page: p,
