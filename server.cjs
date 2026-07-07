@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
+const JSZip = require('jszip');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -48,6 +49,26 @@ if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir);
 }
 const localUpload = multer({ dest: tempDir });
+const imageUpload = multer({
+  dest: tempDir,
+  limits: {
+    files: 100,
+    fileSize: 50 * 1024 * 1024,
+  },
+  fileFilter: (req, file, cb) => {
+    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    const ext = path.extname(originalName).replace('.', '').toLowerCase();
+    if (file.fieldname === 'htmlFile' && ['html', 'htm'].includes(ext)) {
+      cb(null, true);
+      return;
+    }
+    if (file.fieldname === 'files' && ['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error('지원하지 않는 파일 형식입니다.'));
+  },
+});
 
 // Serve static assets from Vite's build directory (dist)
 app.use(express.static(path.join(__dirname, 'dist')));
@@ -71,6 +92,206 @@ app.get('/', (req, res) => {
 // Route 1: Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', platform: process.platform, arch: process.arch });
+});
+
+function runImageWorker(workerData) {
+  return new Promise((resolve, reject) => {
+    const workerPath = path.join(__dirname, 'workers', 'image.worker.cjs');
+    const worker = new Worker(workerPath, { workerData });
+    let settled = false;
+
+    worker.on('message', (message) => {
+      settled = true;
+      resolve(message);
+    });
+
+    worker.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
+
+    worker.on('exit', (code) => {
+      if (code !== 0 && !settled) {
+        reject(new Error(`이미지 워커가 비정상적으로 종료되었습니다 (code: ${code}).`));
+      }
+    });
+  });
+}
+
+function sanitizeUploadName(name, fallback) {
+  const parsed = path.parse(name || fallback || 'image');
+  const safeBase = (parsed.name || 'image').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'image';
+  const safeExt = (parsed.ext || '').toLowerCase().replace(/[^.a-z0-9]/g, '');
+  return `${safeBase}${safeExt}`;
+}
+
+function uniquePathInDir(dir, fileName, usedNames) {
+  const ext = path.extname(fileName);
+  const base = path.basename(fileName, ext);
+  let candidate = fileName;
+  let index = 2;
+
+  while (usedNames.has(candidate.toLowerCase()) || fs.existsSync(path.join(dir, candidate))) {
+    candidate = `${base}_${index}${ext}`;
+    index += 1;
+  }
+
+  usedNames.add(candidate.toLowerCase());
+  return path.join(dir, candidate);
+}
+
+function collectUploadedImageFiles(req) {
+  const files = req.files?.files || [];
+  return Array.isArray(files) ? files : [];
+}
+
+function collectUploadedHtmlFile(req) {
+  const files = req.files?.htmlFile || [];
+  return Array.isArray(files) ? files[0] : null;
+}
+
+function isLocalRequest(req) {
+  const remoteAddress = req.socket?.remoteAddress || req.ip || '';
+  return [
+    '::1',
+    '127.0.0.1',
+    '::ffff:127.0.0.1',
+  ].includes(remoteAddress) || remoteAddress.endsWith(':127.0.0.1');
+}
+
+function imageUploadMiddleware(req, res, next) {
+  imageUpload.fields([{ name: 'files', maxCount: 100 }, { name: 'htmlFile', maxCount: 1 }])(req, res, (err) => {
+    if (!err) {
+      next();
+      return;
+    }
+
+    const errorMessage =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? '단일 파일은 50MB 이하만 업로드할 수 있습니다.'
+        : err.code === 'LIMIT_FILE_COUNT'
+          ? '이미지는 최대 100개까지 업로드할 수 있습니다.'
+          : err.message || '이미지 업로드 중 오류가 발생했습니다.';
+
+    res.status(400).json({ success: false, error: errorMessage });
+  });
+}
+
+// Route 1.5: Image toolkit operations for web browser uploads
+app.post('/image-process', imageUploadMiddleware, async (req, res) => {
+  const uploadedFiles = collectUploadedImageFiles(req);
+  const uploadedHtmlFile = collectUploadedHtmlFile(req);
+  const operation = req.body.operation;
+  const workDir = path.join(tempDir, `image_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`);
+  const inputDir = path.join(workDir, 'input');
+  const outputDir = path.join(workDir, 'output');
+
+  try {
+    if (!['resize', 'stitch', 'split', 'html'].includes(operation)) {
+      return res.status(400).json({ success: false, error: '지원하지 않는 이미지 작업입니다.' });
+    }
+
+    if (operation !== 'html' && uploadedFiles.length === 0) {
+      return res.status(400).json({ success: false, error: '이미지 파일을 추가해주세요.' });
+    }
+
+    if (operation === 'html' && !uploadedHtmlFile && !String(req.body.htmlText || '').trim()) {
+      return res.status(400).json({ success: false, error: 'HTML 파일을 업로드하거나 HTML 코드를 입력해주세요.' });
+    }
+
+    let options = {};
+    try {
+      options = req.body.options ? JSON.parse(req.body.options) : {};
+    } catch (err) {
+      return res.status(400).json({ success: false, error: '이미지 처리 옵션을 읽을 수 없습니다.' });
+    }
+
+    fs.mkdirSync(inputDir, { recursive: true });
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const usedNames = new Set();
+    const inputPaths = [];
+    for (const uploaded of uploadedFiles) {
+      const originalName = Buffer.from(uploaded.originalname, 'latin1').toString('utf8');
+      const safeName = sanitizeUploadName(originalName, uploaded.filename);
+      const targetPath = uniquePathInDir(inputDir, safeName, usedNames);
+      fs.renameSync(uploaded.path, targetPath);
+      inputPaths.push(targetPath);
+    }
+
+    let htmlFilePath = '';
+    if (uploadedHtmlFile) {
+      const originalName = Buffer.from(uploadedHtmlFile.originalname, 'latin1').toString('utf8');
+      const safeName = sanitizeUploadName(originalName, uploadedHtmlFile.filename);
+      htmlFilePath = uniquePathInDir(inputDir, safeName, usedNames);
+      fs.renameSync(uploadedHtmlFile.path, htmlFilePath);
+    }
+
+    const allowLocalSource = process.env.ALLOW_LOCAL_IMAGE_URLS === 'true' || isLocalRequest(req);
+
+    const result = await runImageWorker({
+      operation,
+      inputPaths,
+      htmlText: req.body.htmlText || '',
+      htmlFilePath,
+      outputDir,
+      options,
+      allowLocalUrls: allowLocalSource,
+      allowFileUrls: allowLocalSource,
+    });
+
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error || '이미지 처리 중 오류가 발생했습니다.' });
+    }
+
+    const zip = new JSZip();
+    let hasManifestFile = false;
+    for (const file of result.files || []) {
+      if (!file.path || !fs.existsSync(file.path)) continue;
+      const zipPath = file.relativePath || file.fileName || path.basename(file.path);
+      if (zipPath === 'manifest.json') hasManifestFile = true;
+      zip.file(zipPath, fs.readFileSync(file.path));
+    }
+    if (!hasManifestFile) {
+      zip.file('manifest.json', JSON.stringify(result.manifest || { operation, count: result.files?.length || 0 }, null, 2));
+    }
+
+    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+    const zipName =
+      operation === 'resize'
+        ? 'image_resize_results.zip'
+        : operation === 'stitch'
+          ? 'image_stitch_results.zip'
+          : operation === 'split'
+            ? 'image_split_results.zip'
+            : 'image_results.zip';
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('X-File-Name', encodeURIComponent(zipName));
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+    res.send(zipBuffer);
+  } catch (err) {
+    console.error('[API Server] Image process failed:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: err.message || '이미지 처리 중 오류가 발생했습니다.' });
+    }
+  } finally {
+    for (const uploaded of uploadedFiles) {
+      try {
+        if (uploaded.path && fs.existsSync(uploaded.path)) fs.unlinkSync(uploaded.path);
+      } catch (_) {}
+    }
+    if (uploadedHtmlFile) {
+      try {
+        if (uploadedHtmlFile.path && fs.existsSync(uploadedHtmlFile.path)) fs.unlinkSync(uploadedHtmlFile.path);
+      } catch (_) {}
+    }
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    } catch (_) {}
+  }
 });
 
 // Route 2: Outline PDF/AI files

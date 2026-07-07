@@ -1,6 +1,6 @@
 ---
 title: AI PDF Toolkit
-emoji: 🚀
+emoji: 📄
 colorFrom: blue
 colorTo: purple
 sdk: docker
@@ -8,235 +8,135 @@ pinned: false
 app_port: 7860
 ---
 
-# PDF & AI 툴킷 (PDF & AI Toolkit)
+# 디자인 통합 작업 허브
 
-비디오, 인쇄 및 출판 분야의 그래픽 디자이너와 검수자를 위한 고정밀 **PDF/AI 텍스트 아웃라인 변환** 및 **시각적/의미론적 3단계 비교(Diff) 하이브리드 검수 프로그램**입니다.
+PDF, AI, PSD, 이미지 파일을 한 곳에서 정리하고 검수하는 디자인/인쇄 작업용 데스크톱 및 웹 툴킷입니다.  
+메인 화면은 작업 허브 형태로 구성되어 있으며, PDF 병합, 인쇄용 변환, PDF 비교, 파일 뷰어, 이미지 작업 기능으로 바로 진입할 수 있습니다.
 
-이 문서에는 프로젝트의 전체 폴더 구조, 구현된 핵심 기능의 아키텍처 및 내부 알고리즘 로직이 매우 상세하게 기록되어 있어, **새로운 개발자나 AI 에이전트가 코드를 즉시 파악하고 곧바로 기능 추가 및 디버깅을 시작할 수 있습니다.**
+## 주요 기능
 
----
+- **PDF 병합**: PDF, PDF 호환 AI, 이미지, SVG 파일을 순서대로 하나의 PDF로 병합합니다.
+- **인쇄용 변환**: Ghostscript 기반으로 PDF/AI 파일을 인쇄 전달용 PDF 패키지로 변환합니다.
+- **PDF 비교**: 원본과 수정본 PDF를 대조해 텍스트, 숫자, 도면, 레이아웃 변경 후보를 검수합니다.
+- **뷰어**: AI, EPS, SVG, PDF, PSD 파일을 열어 확대 검수합니다.
+- **PSD 검사**: PSD 레이어와 텍스트를 탐색하고, 선택한 레이어 위치를 미리보기 위에 표시합니다.
+- **이미지 툴킷**: 이미지 크기 변경, 이어붙이기, 긴 이미지 자르기, HTML 이미지 링크 수집을 처리합니다.
 
-## 📂 프로젝트 폴더 구조 (Folder Structure)
+## 화면 구성
+
+- **홈**: 디자인 통합 작업 허브. 모든 기능을 카테고리별로 바로 실행합니다.
+- **PDF 병합**: 파일 드래그 앤 드롭, 병합 순서 관리, 결과 PDF 저장.
+- **인쇄용 변환**: 원본/인쇄용 산출물 패키지 생성.
+- **PDF 비교**: 정밀 대조 모드와 빠른 육안 검수 모드 제공.
+- **뷰어**: PDF 원본/이미지 렌더 모드, PSD 레이어 검색 및 선택 해제.
+- **이미지 툴킷**: 작업 옵션, 업로드 목록, 대형 미리보기 대지, 결과 목록으로 구성.
+
+## 기술 스택
+
+- React 19
+- Vite
+- TypeScript
+- Electron
+- Express
+- pdf-lib
+- pdfjs-dist
+- Ghostscript
+- MuPDF
+- Tesseract.js
+- OpenCV.js
+- sharp
+- ag-psd
+- JSZip
+
+## 로컬 실행
+
+### 1. 의존성 설치
 
 ```bash
-smart-pdf-&-ai-merger/
-├── bin/                        # 임베디드 로컬 바이너리 실행 엔진
-│   ├── gs/                     # Ghostscript 10.02.1 (인쇄용 아웃라인 및 고해상도 벡터 렌더러)
-│   └── mutool.exe              # MuPDF CLI (초고속 Native 텍스트 추출 및 기하 영역 스캔)
-├── workers/
-│   └── compare.worker.cjs      # 핵심 멀티스레드 비교 파이프라인 (OpenCV.js, Tesseract.js, pixelmatch)
-├── src/                        # React Client (Vite + TSX)
-│   ├── features/
-│   │   └── compare/
-│   │       └── CompareTab.tsx  # 동기식 스크롤, 미세 차이 하이라이팅, 무시 규칙 제어 듀얼 뷰어 UI
-│   ├── App.tsx                 # 통합 대시보드 인터페이스
-│   ├── index.css               # 테일윈드/VanillaCSS 커스텀 디자인 시스템
-│   └── main.tsx                # React 엔트리포인트
-├── main.cjs                    # Electron 메인 프로세스 (IPC 핸들러 제어 및 백그라운드 워커 스레딩)
-├── preload.cjs                 # 안전한 렌더러-메인 IPC 브릿지
-├── package.json                # 의존성 모듈 및 빌드 스크립트
-└── tsconfig.json               # 타입스크립트 컴파일 구성
+npm install
 ```
 
----
+### 2. 웹 개발 서버 실행
 
-## 🛠️ 핵심 기능 및 작동 아키텍처 (Key Features & Logic)
-
-### 1. 텍스트 아웃라인 변환 (Text Outlining Process)
-* **목적**: 인쇄용 또는 유통용 문서를 만들기 위해 폰트 유실 우려가 없는 벡터 외곽선(Outline) 상태로 텍스트 오브젝트를 강제 래스터라이징하지 않고 벡터로 패스화합니다.
-* **로직 및 명령어**:
-  Electron 메인 프로세스(`main.cjs`의 `process-outline` 핸들러)에서 Ghostscript 바이너리(`gswin64c.exe`)를 백그라운드에서 구동합니다:
-  ```bash
-  gswin64c.exe -o [출력파일] -dNOPAUSE -dBATCH -sDEVICE=pdfwrite -dCompatibilityLevel=1.6 -dNoOutputFonts=true [입력파일]
-  ```
-  `-dNoOutputFonts=true` 플래그는 PDF 내부에 삽입된 모든 폰트 문자를 외곽선 패스(Vector Path)로 완벽하게 변환하여 완전히 아웃라인화된 고정밀 인쇄용 파일을 보존합니다.
-
----
-
-### 2. 하이브리드 비교 분석 엔진 (`workers/compare.worker.cjs`)
-이 워커 파일은 단일 CPU 스레드가 멈추지 않도록 Electron `Worker Thread` 내부에서 실행되며, **오류 오탐(False Positive)을 획기적으로 줄이고 아웃라인 텍스트 및 미세 디자인 변경을 잡아내는 5단계 분석 알고리즘**으로 구동됩니다.
-
-```mermaid
-graph TD
-    A[GhostScript 페이지 병렬 렌더링] --> B[Standard PDF Box & Content Box 추출]
-    B --> C[아핀 변환 Affine Mapping으로 레이아웃 정렬]
-    C --> D[Layer 1: Native 텍스트 비교]
-    C --> E[Layer 2 & 3: OpenCV 기하도형 및 레이아웃 블록 분석]
-    C --> F[Layer 4: 아웃라인화된 텍스트 대상 OCR 추적 fallbacks]
-    C --> G[Layer 5: pixelmatch + BFS 기반 미세 디자인 및 배경색 차이 스캔]
-    D & E & F & G --> H[종합 검수 결과 데이터 반환 및 렌더러 시각화]
+```bash
+npm run dev
 ```
 
-#### **[Step 1] GhostScript 고해상도 병렬 렌더링**
-* 문서를 정확히 픽셀 단위로 스캔하기 위해 두 문서를 **DPI 150(혹은 설정값)**으로 GhostScript를 사용하여 임시 디렉토리에 고해상도 PNG 파일들(`a1.png`, `b1.png` 등)로 Spawns 병렬 변환합니다.
+기본 개발 서버는 `http://localhost:3000`에서 실행됩니다.
 
-#### **[Step 2] 아웃라인 및 아트보드 보정 (Content Box & Affine Translation)**
-* PDF의 여백이나 대지 크기가 미세하게 다를 때 발생하는 대규모 오차를 방지합니다.
-* `getContentBoundingBox(png)` 알고리즘을 통해 OpenCV 컨투어 스캔으로 흰색 배경이 아닌 실제 인쇄 디자인 요소가 위치한 핵심 사각형 영역(Content Bounding Box)을 추출합니다.
-* A 문서와 B 문서의 Content Box의 폭과 좌표를 기준으로 **아핀 변환(Affine Scale/Offset)**을 도출하여 B 문서 내부 모든 오브젝트의 좌표를 A 문서 좌표계에 정렬(Scaling & Shift Mapping)합니다.
+### 3. API 서버 실행
 
-#### **[Step 3] Native 텍스트 기반 비교 (Layer 1)**
-* `mutool`을 통해 Native PDF 텍스트 오브젝트들의 문자열과 Bounding Box 좌표를 순식간에 추출합니다.
-* 문자를 행(Line) 단위로 묶는 `groupTextIntoLines` 알고리즘을 거친 뒤, A 문서의 특정 행과 정렬된 B 문서의 행을 Dice Similarity 기반으로 1차 매칭합니다.
-* **오탐 무시 규칙 엔진(Ignore Rules Engine)**:
-  * Native Text 비교 시 미세한 문자 오타 하나도 검수되어야 하므로 `diceSim === 1.0`을 요구합니다.
-  * 다만, 숫자가 변경된 경우(가격, 날짜 등)는 1순위 치명적 등급(Critical Severity)으로 필터링하도록 설계되어 있습니다.
+```bash
+npm run server
+```
 
-#### **[Step 4] OpenCV 도형 및 레이아웃 비교 (Layer 2 & 3)**
-* 텍스트 영역을 제외한 도형, 사각형, 선, 프레임 등의 변경 사항을 감지합니다.
-* `detectGeo()` 함수에서 이미지 컨투어를 검출하고 텍스트 경계 영역을 마스킹하여 순수 디자인 프레임만 추출합니다.
-* 두 도형의 IOU(Intersection over Union) 및 아웃라인 형태, 타입(`rect` vs `shape`)을 매칭하여 도형 이동(Spacing Changed), 크기 변화(Size Changed), 타입 변경(Shape Modified)을 추적합니다.
+기본 API 서버는 `http://localhost:8080`에서 실행됩니다.
 
-#### **[Step 5] 고해상도 지역적 벡터 OCR 추적 (Layer 4 - 아웃라인 텍스트 지원)**
-* 일러스트레이터 등에서 텍스트가 깨져서(아웃라인화) Native Text 정보가 소멸한 경우를 완벽하게 추적하기 위한 핵심 하이브리드 로직입니다.
-* 텍스트 프레임이 감지되었으나 Native Text 매칭에 실패한 영역에 대해 Ghostscript 백그라운드 엔진을 통해 **DPI 300 초고해상도로 타겟 영역 벡터 부분 렌더링**을 수행합니다.
-* 추출된 고품질 영역 이미지에 Tesseract.js OCR을 수행하여 텍스트의 실제 의미론적 차이(글자 수정, 신규 추가, 삭제)를 복원해 냅니다.
+### 4. Electron 실행
 
-#### **[Step 6] pixelmatch + BFS 기반 미세 색상 차이 검출 (Layer 5)**
-* "배경 색상 변경"이나 "텍스트 미세 디자인 요소 변형"을 스캔하기 위한 최종 레이어입니다.
-* Native Text나 기하도형이 덮고 있던 레이아웃 오차 영역(`overlapHandled`에 필터링되지 않음)을 무시하지 않고 전체 Content Box 내에서 순수 픽셀 분석을 통과시킵니다.
-* 앤티앨리어싱(Anti-Aliasing)으로 인한 가장자리 잡음을 최소화하기 위해 **외곽 8px 가두리 버퍼(edgeStrip)**를 제외하고 스캔하며, 변경된 픽셀 비율이 **1.5% 미만인 영역은 노이즈로 보고 무시(density filter)**합니다.
-* 변경된 픽셀 덩어리를 묶기 위해 **BFS(Breadth-First Search) 알고리즘**을 활용해 인접 오차 픽셀들을 하나의 논리적 덩어리로 그루핑(Bounding Box화)하여 시각적 디자인 변경 영역(이미지/아이콘 변경)으로 명확히 리포팅합니다.
+```bash
+npm run electron:start
+```
 
----
+## 빌드
 
-### 3. 고기능 듀얼 뷰어 UI (`src/features/compare/CompareTab.tsx`)
-* **스크롤 동기화(Synchronized Scrolling)**: 좌우 패널 중 어느 하나를 스크롤하더라도 보정 좌표 스케일에 따라 상대 캔버스의 스크롤 위치가 정밀하게 자동 이동합니다.
-* **다차원 상태 검수 필터**: 사용자가 Critical(숫자/페이지 수준 변경), High(텍스트 수정), Medium(도형/구조 변경), Low(미세 위치/스타일 변경) 수준으로 필터링하여 보고서를 정렬할 수 있습니다.
+```bash
+npm run build
+```
 
----
-
-## 🏃 개발 및 빌드 명령어 (Development & Build Guide)
-
-### 1. 개발 환경 실행 (Development Mode)
-개발을 진행할 때는 프론트엔드용 Vite 서버와 데스크톱용 Electron 러너를 동시에 실행합니다.
-
-* **Step 1 (Vite 구동)**:
-  ```bash
-  npm run dev
-  ```
-  *(로컬 포트 3000번에서 프론트엔드 HMR(Hot Module Replacement) 구동)*
-
-* **Step 2 (Electron 실행 - 별도의 터미널 창)**:
-  ```bash
-  npm run electron:start
-  ```
-
----
-
-### 2. 프로덕션 패키징 및 빌드 (Production Bundle)
-로컬에 빌드된 웹 에셋을 컴파일하고 윈도우용 데스크톱 배포 실행 파일(`.exe`)을 패키징합니다.
+Electron 패키징은 아래 명령을 사용합니다.
 
 ```bash
 npm run electron:build
 ```
-* **빌드 출력 경로**: `release/PDF & AI Toolkit-win32-x64/` 폴더 내에 모든 의존 패키지와 로컬 바이너리가 동봉된 무설치 실행 파일(`PDF & AI Toolkit.exe`)이 단독 생성됩니다.
 
----
+## 검증 명령
 
----
+```bash
+npm run lint
+npm run build
+node --check server.cjs
+node --check main.cjs
+node --check workers/compare.worker.cjs
+node --check workers/image.worker.cjs
+```
 
-## 🌐 사내 배포용 24시간 가동 웹 서비스 가이드 (Hybrid Web Deployment)
+## 주요 폴더
 
-본 프로젝트는 데스크톱 일렉트론 앱으로 작동할 뿐만 아니라, 회사 임직원들이 아무런 프로그램 설치 없이 브라우저(URL)만으로 24시간 접속하여 사용할 수 있는 **하이브리드 웹 애플리케이션** 규격이 이미 내장되어 있습니다.
+```text
+smart-pdf-&-ai-merger/
+├─ src/
+│  ├─ App.tsx
+│  └─ features/
+│     ├─ compare/
+│     │  └─ CompareTab.tsx
+│     ├─ illustrator/
+│     │  └─ IllustratorViewerTab.tsx
+│     └─ images/
+│        ├─ ImageToolkitTab.tsx
+│        ├─ imageClient.ts
+│        └─ types.ts
+├─ workers/
+│  ├─ compare.worker.cjs
+│  └─ image.worker.cjs
+├─ lib/
+│  ├─ imageProcessor.cjs
+│  └─ htmlImageCollector.cjs
+├─ main.cjs
+├─ preload.cjs
+├─ server.cjs
+└─ package.json
+```
 
-### 1. 로컬 개발 및 API 서버 테스트
-로컬에서 프론트엔드를 실행하고, 백엔드 API 서버를 함께 연동하는 방법입니다:
-*   **API 서버 구동 (Express)**:
-    ```bash
-    node server.cjs
-    ```
-    *(기본 포트 8080번으로 실행되며, 로컬 `bin/gs` 및 `bin/mutool` 엔진을 사용해 백그라운드 연산을 대리 수행합니다.)*
-*   **Vite 개발 클라이언트 구동**:
-    ```bash
-    npm run dev
-    ```
-    *(브라우저로 `http://localhost:3000`에 접속하면, 일렉트론이 없는 순수 브라우저 환경에서도 백엔드 API와 통신하여 모든 기능이 똑같이 작동합니다.)*
+## 배포 메모
 
----
+이 프로젝트는 Hugging Face Spaces Docker 환경을 고려한 README front matter를 유지합니다.  
+`README.md` 상단의 YAML 설정은 배포 설정에 사용될 수 있으므로 삭제하지 마세요.
 
-### 2. 고성능 24시간 클라우드 배포 (Hugging Face Spaces)
-초기 Render.com(512MB RAM) 배포 시 메모리 부족(OOM) 에러가 발생하여, 현재는 **16GB RAM 및 2코어 CPU를 무료로 제공하는 Hugging Face Spaces**에 Docker SDK로 완벽하게 통합 배포되어 있습니다. 백엔드(Express)와 프론트엔드(React)가 하나의 서버에서 구동됩니다.
+GitHub에 `main` 브랜치가 푸시되면 연결된 배포 워크플로가 있는 경우 자동 배포가 이어질 수 있습니다.
 
-* **운영 서버 주소 (즐겨찾기용)**: `https://koohawn-ai-pdf-toolkit.hf.space/`
-* **메인 관리자 페이지**: `https://huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt`
-* **환경 명세**:
-  * **프론트엔드**: Vite 빌드 후 `dist` 폴더를 Express 서버가 정적 서빙합니다.
-  * **백엔드/엔진**: Node.js `server.cjs`가 7860 포트에서 백엔드와 프론트엔드를 동시에 호스팅합니다.
-  * **바이너리 파일(OCR 모델)**: `.traineddata` 파일은 용량이 커서 허깅페이스가 일반 Git 업로드를 거부하므로 반드시 **Git LFS(Large File Storage)**로 트래킹하여 배포됩니다.
+## 주의 사항
 
----
-
-## 💡 AI/개발자를 위한 핵심 유지보수 지침 (필독)
-
-새로운 AI 에이전트나 개발자가 이 코드를 수정하고 서버에 반영(배포)하려면 다음 규칙을 반드시 따라야 합니다.
-
-0. **README.md YAML 메타데이터 보존 (Configuration Error 방지)**:
-   이 파일(`README.md`)의 맨 윗부분 1~10번째 줄에 있는 `---` 로 둘러싸인 YAML 설정값은 허깅페이스가 서버 환경을 구성하는 절대적인 기준점입니다. **어떤 AI 에이전트도 이를 절대 지우거나 훼손해서는 안 됩니다.** 
-   만약 누군가 이 설정을 삭제하고 깃허브나 허깅페이스에 푸시(Push)할 경우, 허깅페이스 스페이스 메인 화면에 **`Configuration error: Missing configuration in README`** 라는 빨간색 치명적 오류가 발생하며 서버 전체가 완전히 다운됩니다.
-   
-   **[ 🚨 긴급 복구 방법 ]**
-   에러가 발생했다면 당황하지 말고 `README.md` 파일 맨 위에 정확히 아래 코드를 다시 붙여넣고 커밋/푸시하면 서버가 2~3분 내로 정상 복구됩니다.
-   ```yaml
-   ---
-   title: AI PDF Toolkit
-   emoji: 🚀
-   colorFrom: blue
-   colorTo: purple
-   sdk: docker
-   pinned: false
-   app_port: 7860
-   ---
-   ```
-
-1. **GitHub 및 Hugging Face 자동 동기화 배포 전략**:
-   본 레포지토리는 GitHub에 코드가 푸시되면 **GitHub Actions를 통해 자동으로 Hugging Face 스페이스로 코드를 동기화(배포)하도록 구축**되어 있습니다.
-
-   **[최초 1회 필수 세팅]**
-   1. 허깅페이스(Hugging Face) 설정에서 `Write` 권한이 있는 Access Token을 발급받습니다.
-   2. 현재 이 GitHub 저장소의 **Settings > Secrets and variables > Actions** 로 이동합니다.
-   3. **New repository secret** 버튼을 누르고, 이름에 `HF_TOKEN`, 값에 발급받은 허깅페이스 토큰을 넣고 저장합니다.
-
-   이제 코드를 수정하고 깃허브로 푸시하기만 하면 됩니다.
-   ```bash
-   git add .
-   git commit -m "Update feature"
-   git push origin main
-   ```
-   * 위 명령어로 깃허브에 코드를 밀어 넣으면, 백그라운드에서 GitHub Actions가 자동으로 허깅페이스 서버로 코드를 강제 푸시하며 약 2~3분 뒤 실 배포가 갱신(`Building` -> `Running`)됩니다.
-
-2. **하이브리드 다중 환경 맵핑 (IPC vs HTTP)**:
-   * [App.tsx](file:///c:/Users/kkh53/Downloads/smart-pdf-&-ai-merger/src/App.tsx) 및 [CompareTab.tsx](file:///c:/Users/kkh53/Downloads/smart-pdf-&-ai-merger/src/features/compare/CompareTab.tsx)는 클라이언트 실행 시 `window.electronAPI` 객체의 존재 유무를 확인합니다.
-   * 일렉트론 래퍼 내에서는 초고속 로컬 파일 IPC(`selectDirectory`, `comparePdfs`)로 무부하 제어하며, 일반 브라우저 환경에서는 백엔드 REST API(/compare-pdfs, /process-outline)로 바이너리를 안전하게 스트리밍하도록 단일 통합 브릿징 설계가 완료되어 있습니다.
-
-3. **인코딩 무결성 준수**:
-   * `workers/compare.worker.cjs` 파일 내에는 한국어 리포팅용 문자열("삭제됨", "도형 타입 변경", "아웃라인" 등)이 포함되어 있습니다.
-   * 파일 수정 시 PowerShell `Set-Content`나 외부 리디렉션을 사용하면 한글 문자가 UTF-8 바이트로 손상(Mojibake)되므로, 반드시 일반적인 IDE 에디터나 Node.js의 `fs.writeFileSync(..., 'utf8')`로만 편집을 가해야 합니다.
-
-4. **OpenCV 리소스 가비지 컬렉션**:
-   * OpenCV.js는 웹어셈블리(Wasm) 힙 메모리를 사용하므로 인스턴스 해제가 누락되면 메모리 누수(OOM)가 발생합니다.
-   * `compare.worker.cjs` 내의 `detectTextRegions` 함수나 기타 OpenCV 가공 영역이 끝날 때는 반드시 모든 매트릭스 변수에 대해 `.delete()`를 호출하여 자원을 수동 소거해 주어야 합니다.
-
----
-
-## ✅ 최근 주요 업데이트 내역
-* **웹(Hugging Face) 환경 인쇄용 4종 변환 지원**:
-  * 기존에는 웹 환경에서 `(인쇄용).pdf` 단 1종만 추출되었으나, 프론트엔드(`App.tsx`)에서 원본과 아웃라인 파일 버퍼를 재사용하여 브라우저 자체적으로 `(원본).ai`, `(원본).pdf`, `(인쇄용).ai`, `(인쇄용).pdf` 총 4종의 파일을 연속 자동 다운로드하도록 로직을 수정했습니다. (팝업 차단 방지용 300ms 딜레이 적용)
-* **Multer 한글 파일명 깨짐(Mojibake) 오류 수정**:
-  * `server.cjs`에서 multipart/form-data 업로드 시 한글이 `latin1`으로 강제 인코딩되어 글자가 깨지던 문제를 `Buffer.from(file.originalname, 'latin1').toString('utf8')`로 완벽하게 복호화하여 해결했습니다.
-
----
-
-## 🚀 다음 AI 에이전트를 위한 인수인계 (Next Steps)
-현재 이 프로젝트를 이어받은 **다음 AI 에이전트(또는 개발자)**는 아래의 **[ 1순위 핵심 과제 ]**를 즉시 수행해야 합니다.
-
-### 🎯 1순위 과제: "사람의 시선(블록 단위 추적) 하이브리드 비교 엔진"으로 아키텍처 개편
-현재 `compare.worker.cjs`는 두 문서를 1대1 픽셀로 강제 겹쳐보는 방식(Pixelmatch)을 사용하여, **대지 크기가 다르거나 마진/그룹이 통째로 1cm만 이동해도 모든 것을 오류로 뱉어내는 치명적인 단점**이 있습니다. 이를 사람의 검수 시선과 동일한 **'블록 추적 기반 로직'**으로 갈아엎어야 합니다.
-
-* **구현해야 할 로직 흐름 (필독)**:
-  1. **시각적 그룹화 (Boxing)**: OpenCV나 MuPDF의 Bounding Box 추출을 이용해 흩어진 텍스트와 이미지들을 의미 있는 덩어리(그룹/박스)로 묶어냅니다.
-  2. **박스 단위 이동 추적 (Translation-Invariant Matching)**: 대지 크기가 다르거나 마진이 바뀌었더라도, A문서의 1번 박스가 B문서의 어디로 이사(이동) 갔는지 위치를 추적하여 짝을 찾아냅니다. (이 때, 통째로 이동한 것은 에러로 잡지 않습니다.)
-  3. **내부 정밀 검사 (Internal Strict Diff)**: 짝을 찾은 두 박스의 뚜껑을 열고(로컬 좌표계 0,0으로 완벽히 정렬한 뒤), 그 안에서만 Pixelmatch나 텍스트 대조를 수행합니다. 안에서 글자 간격이 1mm 틀어졌거나 폰트 크기가 달라졌다면 무조건 에러로 잡아냅니다.
-  4. **미아(누락/추가) 검출**: 짝을 찾지 못하고 남은 박스나 새로 생긴 박스는 '삭제됨' 또는 '추가됨' 에러로 처리합니다.
-
-이 기능을 구현하면, 디자이너들이 여백이나 대지 크기를 바꿨을 때 생기는 가짜 에러(False Positives)를 박멸하고 진짜 내부 디테일의 틀어짐만 귀신같이 잡아내는 완벽한 QA 엔진이 완성됩니다. 해당 과제를 즉시 기획하고 코드를 수정하십시오!
+- `node_modules/`, `dist/`, `release/`, 로그 파일, `temp_uploads/`는 Git에 포함하지 않습니다.
+- `kor.traineddata`, `eng.traineddata`는 OCR 기능에 필요합니다.
+- Windows 경로에 `&`가 포함되어 있으므로 npm 스크립트가 불안정할 때는 `node .\node_modules\...\bin` 형태의 직접 실행이 더 안정적입니다.

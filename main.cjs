@@ -46,18 +46,48 @@ app.on('window-all-closed', () => {
   }
 });
 
-// IPC Handler: Select directory for saving outlined files
-ipcMain.handle('select-directory', async () => {
+// IPC Handler: Select directory for saving output files
+ipcMain.handle('select-directory', async (event, options = {}) => {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory'],
-    title: '아웃라인 완료 파일 저장 폴더 선택',
-    buttonLabel: '폴더 선택',
+    title: options.title || '아웃라인 완료 파일 저장 폴더 선택',
+    buttonLabel: options.buttonLabel || '폴더 선택',
   });
   
   if (result.canceled) {
     return null;
   }
   return result.filePaths[0];
+});
+
+// IPC Handler: Process image toolkit operations using Worker Thread
+ipcMain.handle('image-process', async (event, payload) => {
+  return new Promise((resolve, reject) => {
+    const workerPath = path.join(__dirname, 'workers', 'image.worker.cjs');
+    const worker = new Worker(workerPath, {
+      workerData: payload,
+    });
+
+    let settled = false;
+
+    worker.on('message', (message) => {
+      settled = true;
+      resolve(message);
+    });
+
+    worker.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(new Error(`이미지 워커 에러: ${err.message}`));
+      }
+    });
+
+    worker.on('exit', (code) => {
+      if (code !== 0 && !settled) {
+        reject(new Error(`이미지 워커 종료 에러 (code ${code})`));
+      }
+    });
+  });
 });
 
 // IPC Handler: Process PDF/AI outlining using embedded Ghostscript (gswin64c.exe)

@@ -1016,10 +1016,10 @@ export function CompareTab({
       onDrop={e => { e.preventDefault(); if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); }}
       onClick={() => inputRef.current?.click()}
       className={cn(
-        'border-2 rounded-2xl flex flex-col items-center justify-center gap-3 py-10 cursor-pointer transition-all select-none hover:shadow-md active:scale-[0.99]',
+        'border-2 rounded-2xl bg-white/85 flex flex-col items-center justify-center gap-3 py-10 cursor-pointer transition-all select-none shadow-sm hover:shadow-md active:scale-[0.99]',
         file
-          ? 'border-gray-500 bg-gray-50/50'
-          : 'border-dashed border-gray-200 hover:border-gray-300 hover:bg-gray-50/50'
+          ? 'border-slate-500 bg-slate-50/70'
+          : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
       )}
     >
       {file ? (
@@ -1070,8 +1070,8 @@ export function CompareTab({
         >
           {/* Header */}
           <div>
-            <h2 className="text-xl font-black tracking-tight text-gray-900">PDF 정밀 대조 검수</h2>
-            <p className="text-sm text-gray-500 mt-1">
+            <h2 className="text-lg font-black tracking-tight text-slate-950">PDF 정밀 대조 검수</h2>
+            <p className="mt-1 text-xs font-semibold text-slate-500">
               인쇄물 원본(Before)과 수정본(After)을 대조하여 텍스트·수치·도형 변경을 검출합니다.
             </p>
           </div>
@@ -1088,10 +1088,10 @@ export function CompareTab({
             <div
               onClick={() => setCompareMode('ai')}
               className={cn(
-                "relative rounded-2xl border-2 p-5 cursor-pointer transition-all select-none",
+                "relative rounded-2xl border-2 bg-white/90 p-5 cursor-pointer transition-all select-none",
                 compareMode === 'ai'
-                  ? "border-blue-500 bg-blue-50/40 shadow-lg shadow-blue-100/50 scale-[1.01]"
-                  : "border-gray-200 bg-white hover:border-gray-300 hover:shadow-md"
+                  ? "border-blue-500 bg-blue-50/50 shadow-md shadow-blue-100/50 scale-[1.01]"
+                  : "border-slate-200 hover:border-slate-300 hover:shadow-md"
               )}
             >
               <div className="flex items-center gap-3 mb-3">
@@ -1166,8 +1166,8 @@ export function CompareTab({
               className={cn(
                 "relative rounded-2xl border-2 p-5 cursor-pointer transition-all select-none",
                 compareMode === 'visual'
-                  ? "border-amber-500 bg-amber-50/40 shadow-lg shadow-amber-100/50 scale-[1.01]"
-                  : "border-gray-200 bg-white hover:border-gray-300 hover:shadow-md"
+                  ? "border-amber-500 bg-amber-50/50 shadow-md shadow-amber-100/50 scale-[1.01]"
+                  : "border-slate-200 bg-white/90 hover:border-slate-300 hover:shadow-md"
               )}
             >
               <div className="flex items-center gap-3 mb-1">
@@ -1212,7 +1212,7 @@ export function CompareTab({
                 ? 'bg-gray-100 text-gray-300 cursor-not-allowed border border-gray-100 shadow-none'
                 : compareMode === 'visual'
                   ? 'bg-amber-600 text-white hover:bg-amber-500 active:scale-[0.99] cursor-pointer'
-                  : 'bg-gray-900 text-white hover:bg-gray-800 active:scale-[0.99] cursor-pointer'
+                  : 'bg-slate-950 text-white hover:bg-slate-800 active:scale-[0.99] cursor-pointer'
             )}
           >
             {comparing ? (
@@ -1236,11 +1236,11 @@ export function CompareTab({
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
-          className="w-full max-w-2xl mx-auto mt-14 rounded-2xl border border-gray-200 bg-white p-7 shadow-lg"
+          className="w-full max-w-2xl mx-auto mt-14 rounded-2xl border border-slate-200 bg-white/90 p-7 shadow-sm"
           style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}
         >
           <div className="flex items-start gap-4">
-            <div className="relative flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-gray-900 text-white shadow-md">
+            <div className="relative flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-sm">
               <Loader2 className="h-5 w-5 animate-spin" />
             </div>
             <div className="min-w-0 flex-1">
@@ -1279,7 +1279,7 @@ export function CompareTab({
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
-          className="flex flex-col items-center justify-center gap-6 py-20 bg-white border border-gray-200 rounded-3xl shadow-sm text-center max-w-xl mx-auto mt-12"
+          className="flex flex-col items-center justify-center gap-6 py-20 bg-white/90 border border-slate-200 rounded-3xl shadow-sm text-center max-w-xl mx-auto mt-12"
           style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}
         >
           <div className="p-4 bg-emerald-50 text-emerald-600 rounded-full border border-emerald-100 shadow-md">
@@ -1293,7 +1293,7 @@ export function CompareTab({
           </div>
           <button
             onClick={resetAll}
-            className="flex items-center gap-2 px-5 py-2.5 bg-gray-900 text-white hover:bg-gray-800 rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer"
+            className="flex items-center gap-2 px-5 py-2.5 bg-slate-950 text-white hover:bg-slate-800 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
           >
             <RotateCcw className="w-4 h-4" />
             다른 PDF 대조하기
@@ -1308,7 +1308,7 @@ export function CompareTab({
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
-          className="flex flex-col flex-1 min-h-0 w-full bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-lg"
+          className="flex flex-col flex-1 min-h-0 w-full bg-white/95 border border-slate-200 rounded-2xl overflow-hidden shadow-sm"
           style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}
           ref={viewerContainerRef}
         >

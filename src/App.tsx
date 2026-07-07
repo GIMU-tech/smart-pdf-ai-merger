@@ -19,10 +19,21 @@ import {
   Printer,
   Search,
   FileImage,
+  Images,
+  Ruler,
+  Layers3,
+  Scissors,
+  Braces,
+  Plus,
+  Settings,
+  MoreHorizontal,
+  PanelLeft,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { CompareTab } from './features/compare/CompareTab';
 import { IllustratorViewerTab } from './features/illustrator/IllustratorViewerTab';
+import { ImageToolkitTab } from './features/images/ImageToolkitTab';
+import type { ImageToolMode } from './features/images/types';
 
 interface FileItem {
   id: string;
@@ -40,7 +51,7 @@ type DownloadItem = {
   emphasis?: boolean;
 };
 
-type AppTab = 'home' | 'merge' | 'outline' | 'compare' | 'illustrator';
+type AppTab = 'home' | 'merge' | 'outline' | 'compare' | 'illustrator' | 'images';
 
 type FeatureCard = {
   tab: Exclude<AppTab, 'home'>;
@@ -90,14 +101,78 @@ const featureCards: FeatureCard[] = [
   },
   {
     tab: 'illustrator',
-    title: '일러스트 뷰어',
+    title: '뷰어',
     eyebrow: '벡터 확인',
-    description: 'AI, EPS, SVG, PDF 파일을 빠르게 열어 확대 검수하고 원본을 내려받습니다.',
-    formats: 'AI, EPS, SVG, PDF',
-    purpose: '일러스트 파일 미리보기, 확대 검수',
+    description: 'AI, EPS, SVG, PDF, PSD 파일을 빠르게 열어 확대 검수하고 원본을 내려받습니다.',
+    formats: 'AI, EPS, SVG, PDF, PSD',
+    purpose: '파일 미리보기, 확대 검수',
     cta: '파일 열어보기',
     accent: 'from-emerald-500 to-teal-400',
     icon: FileImage,
+  },
+  {
+    tab: 'images',
+    title: '이미지 툴킷',
+    eyebrow: '상세페이지',
+    description: '이미지 크기 변경, 이어붙이기, 자르기, HTML 이미지 수집을 처리합니다.',
+    formats: 'PNG, JPG, JPEG, WebP, HTML',
+    purpose: '상세페이지 제작, 쇼핑몰 이미지 정리',
+    cta: '이미지 작업하기',
+    accent: 'from-violet-500 to-fuchsia-400',
+    icon: Images,
+  },
+];
+
+const homeRailItems: Array<{ tab?: AppTab; label: string; icon: React.ComponentType<{ className?: string }>; muted?: boolean }> = [
+  { label: 'New', icon: Plus, muted: true },
+  { tab: 'home', label: '홈', icon: Home },
+  { tab: 'merge', label: '병합', icon: Files },
+  { tab: 'outline', label: '출력', icon: Printer },
+  { tab: 'compare', label: '비교', icon: Search },
+  { tab: 'illustrator', label: '뷰어', icon: FileImage },
+  { tab: 'images', label: '이미지', icon: Images },
+];
+
+type WorkspaceItem = {
+  tab: Exclude<AppTab, 'home'>;
+  title: string;
+  desc: string;
+  icon: React.ComponentType<{ className?: string }>;
+  color: string;
+  imageMode?: ImageToolMode;
+};
+
+const workspaceGroups: Array<{
+  label: string;
+  items: WorkspaceItem[];
+}> = [
+  {
+    label: '문서 준비',
+    items: [
+      { tab: 'merge', title: 'PDF 병합', desc: 'PDF, AI, 이미지 묶음', icon: Files, color: 'text-sky-500' },
+      { tab: 'outline', title: '인쇄용 변환', desc: '출력 전달 파일 생성', icon: Printer, color: 'text-amber-500' },
+    ],
+  },
+  {
+    label: '정밀 검수',
+    items: [
+      { tab: 'compare', title: 'PDF 비교', desc: '수정 전후 변경점 확인', icon: Search, color: 'text-rose-500' },
+    ],
+  },
+  {
+    label: '파일 확인',
+    items: [
+      { tab: 'illustrator', title: '뷰어', desc: 'AI, PDF, PSD 확대 검수', icon: FileImage, color: 'text-emerald-500' },
+    ],
+  },
+  {
+    label: '이미지 제작',
+    items: [
+      { tab: 'images', imageMode: 'resize', title: '크기 변경', desc: '지정 폭 일괄 변환', icon: Ruler, color: 'text-violet-500' },
+      { tab: 'images', imageMode: 'stitch', title: '이어붙이기', desc: '이미지 세로 합치기', icon: Layers3, color: 'text-fuchsia-500' },
+      { tab: 'images', imageMode: 'split', title: '자르기', desc: '긴 이미지 분할', icon: Scissors, color: 'text-orange-500' },
+      { tab: 'images', imageMode: 'html', title: 'HTML 수집', desc: '이미지 링크 추출', icon: Braces, color: 'text-cyan-500' },
+    ],
   },
 ];
 
@@ -107,6 +182,16 @@ function formatSize(bytes: number) {
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function uniqueWorkspaceItems(items: WorkspaceItem[]) {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    const key = item.imageMode ? `${item.tab}-${item.imageMode}` : `${item.tab}-${item.title}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 const MERGE_EXTENSIONS = ['pdf', 'ai', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
@@ -174,6 +259,7 @@ async function addImagePageToPdf(target: PDFDocument, file: File) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('home');
+  const [imageInitialMode, setImageInitialMode] = useState<ImageToolMode>('resize');
 
   // ── Merge tab state ──
   const [mergeFiles, setMergeFiles] = useState<FileItem[]>([]);
@@ -414,11 +500,19 @@ export default function App() {
     { tab: 'merge', label: 'PDF 병합' },
     { tab: 'outline', label: '인쇄용 변환' },
     { tab: 'compare', label: 'PDF 비교' },
-    { tab: 'illustrator', label: '일러스트 뷰어' },
+    { tab: 'illustrator', label: '뷰어' },
+    { tab: 'images', label: '이미지 툴킷' },
   ];
 
   const downloadOutlineItem = (item: DownloadItem) => {
     downloadBlob(item.blob, item.fileName);
+  };
+
+  const openWorkspaceItem = (item: WorkspaceItem) => {
+    if (item.tab === 'images' && item.imageMode) {
+      setImageInitialMode(item.imageMode);
+    }
+    setActiveTab(item.tab);
   };
 
   const downloadOutlineZip = async () => {
@@ -434,15 +528,16 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f7f4ec] text-gray-900 flex flex-col" style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}>
+    <div className="min-h-screen bg-[#fbfcfd] text-slate-950 flex flex-col bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.08)_1px,transparent_0)] [background-size:22px_22px]" style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}>
 
       {/* ── Top bar ── */}
-      <header className="border-b border-gray-200/80 bg-white/90 px-4 sm:px-8 h-14 flex items-center justify-between flex-shrink-0 backdrop-blur">
+      {activeTab !== 'illustrator' && activeTab !== 'home' && (
+      <header className="border-b border-slate-200/80 bg-white/90 px-4 sm:px-6 h-14 flex items-center justify-between flex-shrink-0 backdrop-blur">
         <button onClick={() => setActiveTab('home')} className="flex items-center gap-3">
-          <div className="w-6 h-6 bg-gray-900 rounded flex items-center justify-center shadow-sm">
-            <FilePlus2 className="w-3.5 h-3.5 text-white" />
+          <div className="w-8 h-8 bg-slate-950 rounded-xl flex items-center justify-center shadow-sm">
+            <FilePlus2 className="w-4 h-4 text-white" />
           </div>
-          <span className="text-sm font-semibold tracking-tight">PDF & AI 툴킷</span>
+          <span className="text-sm font-black tracking-tight">Print Studio Desk</span>
         </button>
         <nav className="flex items-center gap-1 overflow-x-auto">
           {navItems.map(({ tab, label }) => (
@@ -450,10 +545,10 @@ export default function App() {
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
-                'whitespace-nowrap px-3 sm:px-4 py-1.5 rounded-md text-xs font-medium transition-all',
+                'whitespace-nowrap px-3 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition-all',
                 activeTab === tab
-                  ? 'bg-gray-900 text-white'
-                  : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+                  ? 'bg-slate-950 text-white shadow-sm'
+                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
               )}
             >
               {tab === 'home' && <Home className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />}
@@ -462,23 +557,126 @@ export default function App() {
           ))}
         </nav>
       </header>
+      )}
 
       {/* ── Content ── */}
       <main className={cn(
         "flex-grow flex flex-col w-full min-h-0 min-w-0 transition-all duration-300",
         activeTab === 'home'
-          ? "max-w-none bg-[#f7f4ec] px-4 py-6 sm:px-8 sm:py-10"
+          ? "max-w-none p-0 bg-white h-screen"
           : activeTab === 'compare'
           ? (compareResults && compareResults.length > 0) || compareExpanded
-            ? "max-w-none p-6 bg-gray-150/40 h-[calc(100vh-56px)]"
-            : "max-w-2xl mx-auto px-6 py-10 gap-6"
+            ? "max-w-none p-4 bg-[#fbfcfd]/80 h-[calc(100vh-56px)]"
+            : "max-w-2xl mx-auto px-6 py-10 gap-5"
           : activeTab === 'illustrator'
-            ? "max-w-none p-0 bg-gray-100 h-[calc(100vh-56px)]"
-            : "max-w-2xl mx-auto px-6 py-10 gap-6"
+            ? "max-w-none p-0 bg-[#fbfcfd] h-screen"
+          : activeTab === 'images'
+            ? "max-w-none p-0 bg-[#fbfcfd] h-[calc(100vh-56px)]"
+            : "max-w-2xl mx-auto px-6 py-10 gap-5"
       )}>
 
         {/* ── HOME DASHBOARD ── */}
-        <div style={{ display: activeTab === 'home' ? 'block' : 'none' }} className="w-full animate-fadeIn">
+        <div style={{ display: activeTab === 'home' ? 'flex' : 'none' }} className="h-full w-full animate-fadeIn bg-[#fbfcfd] text-slate-950">
+          <aside className="flex h-full w-[72px] flex-shrink-0 flex-col items-center border-r border-slate-200/80 bg-white px-2 py-4">
+            <button
+              onClick={() => setActiveTab('home')}
+              className="mb-8 flex h-9 w-9 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm"
+              title="PDF & AI 툴킷"
+            >
+              <FilePlus2 className="h-4 w-4" />
+            </button>
+
+            <div className="flex flex-1 flex-col items-center gap-3">
+              {homeRailItems.map(item => {
+                const Icon = item.icon;
+                const active = item.tab === activeTab;
+                return (
+                  <button
+                    key={item.label}
+                    onClick={() => item.tab && setActiveTab(item.tab)}
+                    className={cn(
+                      'group flex w-full flex-col items-center gap-1 rounded-2xl px-1.5 py-2 text-[10px] font-bold transition',
+                      active ? 'bg-slate-100 text-slate-950' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900',
+                      item.muted && 'text-slate-400'
+                    )}
+                    title={item.label}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span className="leading-none">{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-col items-center gap-2">
+              <button className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-50 hover:text-slate-700" title="설정">
+                <Settings className="h-4 w-4" />
+              </button>
+              <button className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-50 hover:text-slate-700" title="더보기">
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+            </div>
+          </aside>
+
+          <section className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.08)_1px,transparent_0)] [background-size:22px_22px]" />
+            <div className="relative flex h-14 items-center justify-between px-6">
+              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-500 shadow-sm">
+                <PanelLeft className="h-3.5 w-3.5" />
+                Print Studio Desk
+              </div>
+            </div>
+
+            <div className="relative flex flex-1 flex-col items-center justify-center px-6 py-8">
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="w-full max-w-[1220px] -translate-y-[6vh] lg:-translate-y-[9vh]"
+              >
+                <div className="mx-auto max-w-[820px] px-1 text-center">
+                  <div className="flex flex-col items-center">
+                    <div className="min-w-0">
+                      <h1 className="text-[32px] font-black tracking-tight text-slate-950 sm:text-[42px]">
+                        디자인 통합 작업 허브
+                      </h1>
+                      <p className="mt-2 text-sm font-semibold text-slate-500">
+                        파일 정리, 변환, 검수, 이미지 작업을 한 곳에서 시작합니다.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mx-auto mt-12 flex w-fit max-w-full flex-wrap justify-center gap-y-5">
+                  {workspaceGroups.map(group => (
+                    <div key={group.label} className="w-fit min-w-0 px-3 py-2 lg:border-r lg:border-slate-200/80 lg:py-0 first:lg:pl-0 last:border-r-0 last:lg:pr-0">
+                      <p className="mb-3 text-center text-xs font-black text-slate-400">{group.label}</p>
+                      <div className="flex flex-wrap justify-center gap-2">
+                        {uniqueWorkspaceItems(group.items).map(item => {
+                          const Icon = item.icon;
+                          return (
+                            <button
+                              key={`${item.tab}-${item.title}`}
+                              onClick={() => openWorkspaceItem(item)}
+                              className="group flex w-[96px] flex-col items-center gap-2 rounded-2xl px-2 py-3 text-center transition hover:bg-white hover:shadow-[0_12px_36px_rgba(15,23,42,0.08)]"
+                            >
+                              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5">
+                                <Icon className={cn('h-5 w-5', item.color)} />
+                              </span>
+                              <span className="text-xs font-black text-slate-900">{item.title}</span>
+                              <span className="min-h-8 break-keep text-[10px] font-semibold leading-4 text-slate-400">{item.desc}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            </div>
+          </section>
+        </div>
+
+        <div style={{ display: 'none' }} className="w-full animate-fadeIn">
           <section className="relative mx-auto max-w-6xl overflow-hidden rounded-[2rem] border border-white/70 bg-white/70 p-6 shadow-sm sm:p-9">
             <div className="pointer-events-none absolute inset-0 opacity-70 [background-image:linear-gradient(rgba(15,23,42,.045)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,.045)_1px,transparent_1px)] [background-size:28px_28px]" />
             <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full bg-amber-200/50 blur-3xl" />
@@ -489,7 +687,7 @@ export default function App() {
                 <p className="text-xs font-black uppercase tracking-[0.28em] text-gray-400">Print Studio Desk</p>
                 <h1 className="mt-3 text-3xl font-black tracking-tight text-gray-950 sm:text-5xl">필요한 인쇄 도구를 바로 시작하세요</h1>
                 <p className="mt-4 max-w-2xl text-sm font-medium leading-6 text-gray-500">
-                  병합, 인쇄용 변환, 수정 검수, 일러스트 파일 확인을 한 화면에서 고르고 작업 흐름을 이어갑니다.
+                  병합, 인쇄용 변환, 수정 검수, 파일 확인을 한 화면에서 고르고 작업 흐름을 이어갑니다.
                 </p>
               </div>
               <div className="rounded-2xl border border-gray-200/80 bg-white/80 px-4 py-3 text-xs font-bold text-gray-500 shadow-sm">
@@ -543,10 +741,10 @@ export default function App() {
         </div>
 
         {/* ════ TAB 1: MERGE ════ */}
-        <div style={{ display: activeTab === 'merge' ? 'flex' : 'none' }} className="flex-col gap-6 w-full flex animate-fadeIn">
+        <div style={{ display: activeTab === 'merge' ? 'flex' : 'none' }} className="flex-col gap-5 w-full flex animate-fadeIn">
           <div>
-            <h2 className="text-xl font-semibold tracking-tight">PDF 병합</h2>
-            <p className="text-sm text-gray-400 mt-1">PDF와 AI 파일을 순서대로 하나의 PDF로 합칩니다.</p>
+            <h2 className="text-lg font-black tracking-tight text-slate-950">PDF 병합</h2>
+            <p className="mt-1 text-xs font-semibold text-slate-400">PDF와 AI 파일을 순서대로 하나의 PDF로 합칩니다.</p>
           </div>
 
           {/* Drop zone */}
@@ -556,10 +754,10 @@ export default function App() {
             onDrop={handleMergeDrop}
             onClick={() => mergeInputRef.current?.click()}
             className={cn(
-              'border rounded-xl flex flex-col items-center justify-center gap-2 py-10 cursor-pointer transition-all select-none',
+              'border rounded-2xl bg-white/85 flex flex-col items-center justify-center gap-2 py-10 cursor-pointer transition-all select-none shadow-sm',
               mergeDragging
-                ? 'border-gray-400 bg-gray-50'
-                : 'border-dashed border-gray-200 hover:border-gray-300 hover:bg-gray-50/50'
+                ? 'border-slate-400 bg-slate-50'
+                : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
             )}
           >
             <Upload className="w-5 h-5 text-gray-300" />
@@ -589,8 +787,8 @@ export default function App() {
 
           {/* File list */}
           {mergeFiles.length > 0 && (
-            <div className="border border-gray-100 rounded-xl overflow-hidden animate-fadeIn">
-              <div className="px-4 py-3 border-b border-gray-50 flex justify-between items-center bg-gray-50/50">
+            <div className="border border-slate-200 rounded-2xl overflow-hidden animate-fadeIn bg-white/90 shadow-sm">
+              <div className="px-4 py-3 border-b border-slate-100 flex justify-between items-center bg-slate-50/70">
                 <span className="text-xs text-gray-400 font-medium">{mergeFiles.length}개 파일</span>
                 <button onClick={() => setMergeFiles([])} className="text-xs text-gray-400 hover:text-red-500 transition-colors">전체 제거</button>
               </div>
@@ -601,7 +799,7 @@ export default function App() {
                   const isPdf = ext === 'pdf';
                   return (
                     <motion.li key={f.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                      className="flex items-center px-4 py-3 gap-3 group hover:bg-gray-50/50 transition-colors">
+                      className="flex items-center px-4 py-3 gap-3 group hover:bg-slate-50/70 transition-colors">
                       <span className="text-xs text-gray-300 w-5 text-right flex-shrink-0">{idx + 1}</span>
                       <span className={cn(
                         'text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0',
@@ -628,7 +826,7 @@ export default function App() {
                 value={mergeOutputName}
                 onChange={e => setMergeOutputName(e.target.value)}
                 placeholder="출력 파일 이름"
-                className="w-full text-sm px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:border-gray-400 transition-colors pr-12 placeholder:text-gray-300"
+                className="w-full text-sm px-4 py-2.5 border border-slate-200 bg-white/90 rounded-xl focus:outline-none focus:border-slate-400 transition-colors pr-12 placeholder:text-slate-300 shadow-sm"
               />
               <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-300 font-mono">.pdf</span>
             </div>
@@ -636,10 +834,10 @@ export default function App() {
               onClick={runMerge}
               disabled={isMerging || mergeFiles.length < 2}
               className={cn(
-                'flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all flex-shrink-0',
+                'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex-shrink-0',
                 isMerging || mergeFiles.length < 2
-                  ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
-                  : 'bg-gray-900 text-white hover:bg-gray-700 active:scale-[0.98]'
+                  ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                  : 'bg-slate-950 text-white hover:bg-slate-800 active:scale-[0.98]'
               )}
             >
               {isMerging ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
@@ -649,10 +847,10 @@ export default function App() {
         </div>
 
         {/* ════ TAB 2: OUTLINE ════ */}
-        <div style={{ display: activeTab === 'outline' ? 'flex' : 'none' }} className="flex-col gap-6 w-full flex animate-fadeIn">
+        <div style={{ display: activeTab === 'outline' ? 'flex' : 'none' }} className="flex-col gap-5 w-full flex animate-fadeIn">
           <div>
-            <h2 className="text-xl font-semibold tracking-tight">인쇄용 변환</h2>
-            <p className="text-sm text-gray-400 mt-1">글씨를 아웃라인화하여 4종 파일로 자동 패키징합니다.</p>
+            <h2 className="text-lg font-black tracking-tight text-slate-950">인쇄용 변환</h2>
+            <p className="mt-1 text-xs font-semibold text-slate-400">글씨를 아웃라인화하여 4종 파일로 자동 패키징합니다.</p>
           </div>
 
           {/* Drop zone */}
@@ -663,10 +861,10 @@ export default function App() {
               onDrop={handleOutlineDrop}
               onClick={() => outlineInputRef.current?.click()}
               className={cn(
-                'border rounded-xl flex flex-col items-center justify-center gap-2 py-10 cursor-pointer transition-all select-none',
+                'border rounded-2xl bg-white/85 flex flex-col items-center justify-center gap-2 py-10 cursor-pointer transition-all select-none shadow-sm',
                 outlineDragging
-                  ? 'border-gray-400 bg-gray-50'
-                  : 'border-dashed border-gray-200 hover:border-gray-300 hover:bg-gray-50/50'
+                  ? 'border-slate-400 bg-slate-50'
+                  : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
               )}
             >
               <Upload className="w-5 h-5 text-gray-300" />
@@ -685,7 +883,7 @@ export default function App() {
           {/* Selected file card */}
           {outlineFile && !outlineSuccess && (
             <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
-              className="border border-gray-100 rounded-xl p-4 flex items-center gap-3 animate-fadeIn">
+              className="border border-slate-200 rounded-2xl bg-white/90 p-4 flex items-center gap-3 animate-fadeIn shadow-sm">
               <div className={cn(
                 'text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0',
                 outlineFile.name.toLowerCase().endsWith('.ai') ? 'bg-orange-50 text-orange-500' : 'bg-blue-50 text-blue-500'
@@ -729,7 +927,7 @@ export default function App() {
                   {outlineDownloads.length > 0 && (
                     <button
                       onClick={() => void downloadOutlineZip()}
-                      className="flex items-center gap-2 rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-gray-700"
+                      className="flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
                     >
                       <Download className="h-3.5 w-3.5" />
                       전체 ZIP 다운로드
@@ -784,16 +982,16 @@ export default function App() {
                 value={outlineName}
                 onChange={e => setOutlineName(e.target.value)}
                 placeholder="출력 파일 이름"
-                className="flex-1 text-sm px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:border-gray-400 transition-colors placeholder:text-gray-300"
+                 className="flex-1 text-sm px-4 py-2.5 border border-slate-200 bg-white/90 rounded-xl focus:outline-none focus:border-slate-400 transition-colors placeholder:text-slate-300 shadow-sm"
               />
               <button
                 onClick={runOutlining}
                 disabled={isOutlining}
                 className={cn(
-                  'flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all flex-shrink-0',
+                  'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex-shrink-0',
                   isOutlining
-                    ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
-                    : 'bg-gray-900 text-white hover:bg-gray-700 active:scale-[0.98]'
+                    ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                    : 'bg-slate-950 text-white hover:bg-slate-800 active:scale-[0.98]'
                 )}
               >
                 {isOutlining ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
@@ -821,6 +1019,13 @@ export default function App() {
           className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
         >
           <IllustratorViewerTab onGoHome={() => setActiveTab('home')} />
+        </div>
+
+        <div
+          style={{ display: activeTab === 'images' ? 'flex' : 'none' }}
+          className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
+        >
+          <ImageToolkitTab initialMode={imageInitialMode} />
         </div>
 
         <div 

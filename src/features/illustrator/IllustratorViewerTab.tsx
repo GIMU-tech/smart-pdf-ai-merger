@@ -12,10 +12,36 @@ import {
   ZoomOut,
   Home,
   FilePlus2,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  Layers,
+  Type,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-type PreviewMode = 'pdf' | 'svg' | 'image';
+type PreviewMode = 'pdf' | 'svg' | 'image' | 'psd';
+type RenderMode = 'native' | 'image';
+
+type PsdLayerInfo = {
+  id: string;
+  name: string;
+  depth: number;
+  hidden: boolean;
+  isGroup: boolean;
+  hasImage: boolean;
+  text?: string;
+  bbox?: { left: number; top: number; width: number; height: number };
+};
+
+type PsdInfo = {
+  width: number;
+  height: number;
+  layerCount: number;
+  textLayerCount: number;
+  layers: PsdLayerInfo[];
+};
 
 type ViewerState = {
   file: File;
@@ -23,13 +49,14 @@ type ViewerState = {
   mode: PreviewMode;
   pageCount: number;
   converted: boolean;
+  psd?: PsdInfo;
 };
 
 type IllustratorViewerTabProps = {
   onGoHome?: () => void;
 };
 
-const SUPPORTED_EXTENSIONS = ['ai', 'eps', 'svg', 'pdf'];
+const SUPPORTED_EXTENSIONS = ['ai', 'eps', 'svg', 'pdf', 'psd'];
 
 function formatSize(bytes: number) {
   if (bytes === 0) return '0 B';
@@ -62,8 +89,8 @@ async function countPdfPages(fileOrBlob: Blob) {
   }
 }
 
-function viewerSrc(url: string) {
-  return `${url}#toolbar=0&navpanes=0&scrollbar=1&view=FitH`;
+function viewerSrcForPage(url: string, page: number) {
+  return `${url}#page=${page}&toolbar=0&navpanes=0&scrollbar=1&view=FitH`;
 }
 
 async function hasPdfHeader(file: File) {
@@ -80,6 +107,82 @@ async function makeTypedBlobUrl(file: File, mimeType: string) {
   };
 }
 
+function flattenPsdLayers(layers: any[] | undefined, depth = 0, prefix = 'layer'): PsdLayerInfo[] {
+  if (!layers?.length) return [];
+
+  return layers.flatMap((layer, index) => {
+    const children = flattenPsdLayers(layer.children, depth + 1, `${prefix}-${index}`);
+    const left = Number(layer.left || 0);
+    const top = Number(layer.top || 0);
+    const right = Number(layer.right || left);
+    const bottom = Number(layer.bottom || top);
+    const width = Math.max(0, right - left);
+    const height = Math.max(0, bottom - top);
+    const text = typeof layer.text?.text === 'string' ? layer.text.text.trim() : '';
+    const current: PsdLayerInfo = {
+      id: `${prefix}-${index}`,
+      name: layer.name || (layer.children?.length ? 'Group' : 'Layer'),
+      depth,
+      hidden: !!layer.hidden,
+      isGroup: !!layer.children?.length,
+      hasImage: !!(layer.canvas || layer.imageData),
+      text: text || undefined,
+      bbox: width > 0 && height > 0 ? { left, top, width, height } : undefined,
+    };
+    return [current, ...children];
+  });
+}
+
+function makePsdPreviewCanvas(psd: any) {
+  if (psd.canvas) return psd.canvas as HTMLCanvasElement;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Number(psd.width || 1));
+  canvas.height = Math.max(1, Number(psd.height || 1));
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+
+  const drawLayers = (layers: any[] | undefined) => {
+    if (!layers?.length) return;
+    [...layers].reverse().forEach(layer => {
+      if (layer.hidden) return;
+      if (layer.children?.length) {
+        drawLayers(layer.children);
+        return;
+      }
+      if (layer.canvas) {
+        context.globalAlpha = typeof layer.opacity === 'number' ? layer.opacity / 255 : 1;
+        context.drawImage(layer.canvas, Number(layer.left || 0), Number(layer.top || 0));
+        context.globalAlpha = 1;
+      }
+    });
+  };
+
+  drawLayers(psd.children);
+  return canvas;
+}
+
+async function renderPdfPageToImage(url: string, pageNumber: number) {
+  const pdfjs: any = await import('pdfjs-dist');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
+
+  const task = pdfjs.getDocument({ url });
+  const pdf = await task.promise;
+  try {
+    const pdfPage = await pdf.getPage(pageNumber);
+    const viewport = pdfPage.getViewport({ scale: 2 });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('이미지 렌더 캔버스를 만들 수 없습니다.');
+    await pdfPage.render({ canvasContext: context, viewport }).promise;
+    return canvas.toDataURL('image/png');
+  } finally {
+    pdf.destroy?.();
+  }
+}
+
 export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const previousUrlRef = useRef<string | null>(null);
@@ -87,6 +190,11 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
   const [viewer, setViewer] = useState<ViewerState | null>(null);
   const [page, setPage] = useState(1);
   const [zoom, setZoom] = useState(100);
+  const [renderMode, setRenderMode] = useState<RenderMode>('native');
+  const [pdfImageUrl, setPdfImageUrl] = useState('');
+  const [renderingImage, setRenderingImage] = useState(false);
+  const [psdQuery, setPsdQuery] = useState('');
+  const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -96,15 +204,89 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
     };
   }, []);
 
-  const resetUrl = (nextUrl: string) => {
+  const resetUrl = (nextUrl: string, revokeLater = true) => {
     if (previousUrlRef.current) URL.revokeObjectURL(previousUrlRef.current);
-    previousUrlRef.current = nextUrl;
+    previousUrlRef.current = revokeLater ? nextUrl : null;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setPdfImageUrl('');
+
+    if (!viewer || viewer.mode !== 'pdf' || renderMode !== 'image') {
+      setRenderingImage(false);
+      return;
+    }
+
+    setRenderingImage(true);
+    renderPdfPageToImage(viewer.sourceUrl, page)
+      .then(url => {
+        if (!cancelled) setPdfImageUrl(url);
+      })
+      .catch((err: any) => {
+        if (!cancelled) setError(err.message || 'PDF를 이미지로 렌더하지 못했습니다.');
+      })
+      .finally(() => {
+        if (!cancelled) setRenderingImage(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [viewer?.sourceUrl, viewer?.mode, renderMode, page]);
+
+  useEffect(() => {
+    if (!viewer) return;
+    setPage(current => Math.min(Math.max(1, current), viewer.pageCount));
+  }, [viewer?.pageCount]);
+
+  const openPsd = async (file: File) => {
+    setLoading(true);
+    setError(null);
+    setPage(1);
+    setZoom(100);
+    setRenderMode('image');
+    setPsdQuery('');
+    setActiveLayerId(null);
+
+    try {
+      const { readPsd } = await import('ag-psd');
+      const buffer = await file.arrayBuffer();
+      const psd = readPsd(buffer, { skipThumbnail: true });
+      const compositeCanvas = makePsdPreviewCanvas(psd);
+      if (!compositeCanvas) {
+        throw new Error('이 PSD에는 표시 가능한 합성 미리보기 이미지가 없습니다.');
+      }
+
+      const layers = flattenPsdLayers(psd.children);
+      const sourceUrl = compositeCanvas.toDataURL('image/png');
+      resetUrl(sourceUrl, false);
+      setViewer({
+        file,
+        sourceUrl,
+        mode: 'psd',
+        pageCount: 1,
+        converted: false,
+        psd: {
+          width: psd.width,
+          height: psd.height,
+          layerCount: layers.length,
+          textLayerCount: layers.filter(layer => !!layer.text).length,
+          layers,
+        },
+      });
+      setActiveLayerId(null);
+    } catch (err: any) {
+      setError(err.message || 'PSD 파일을 읽지 못했습니다.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const openDirect = async (file: File) => {
     const ext = extensionOf(file);
     if (!SUPPORTED_EXTENSIONS.includes(ext)) {
-      setError('AI, EPS, SVG, PDF 파일만 열 수 있습니다.');
+      setError('AI, EPS, SVG, PDF, PSD 파일만 열 수 있습니다.');
       return;
     }
 
@@ -112,6 +294,14 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
     setLoading(false);
     setPage(1);
     setZoom(100);
+    setRenderMode('native');
+    setPsdQuery('');
+    setActiveLayerId(null);
+
+    if (ext === 'psd') {
+      await openPsd(file);
+      return;
+    }
 
     if (ext === 'eps') {
       await convertPreview(file);
@@ -169,6 +359,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
       });
       setPage(1);
       setZoom(100);
+      setRenderMode(data.mode === 'image' ? 'image' : 'native');
     } catch (err: any) {
       setError(err.message || 'PDF 호환 저장된 AI 파일이 아니거나 EPS 변환에 실패했습니다.');
     } finally {
@@ -194,36 +385,101 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
   };
 
   const zoomLabel = useMemo(() => `${zoom}%`, [zoom]);
+  const filteredPsdLayers = useMemo(() => {
+    const layers = viewer?.psd?.layers || [];
+    const query = psdQuery.trim().toLowerCase();
+    if (!query) return layers;
+    return layers.filter(layer =>
+      layer.name.toLowerCase().includes(query) ||
+      (layer.text || '').toLowerCase().includes(query)
+    );
+  }, [viewer?.psd?.layers, psdQuery]);
+  const activeLayer = useMemo(
+    () => viewer?.psd?.layers.find(layer => layer.id === activeLayerId) || null,
+    [viewer?.psd?.layers, activeLayerId]
+  );
+  const viewerMeta = viewer
+    ? `${extensionOf(viewer.file).toUpperCase()} · ${formatSize(viewer.file.size)} · ${
+        viewer.mode === 'psd'
+          ? `${viewer.psd?.width || 0}×${viewer.psd?.height || 0}px · 레이어 ${viewer.psd?.layerCount || 0}개`
+          : viewer.converted
+            ? 'PDF 미리보기'
+            : viewer.mode === 'pdf'
+              ? '원본 PDF'
+              : '원본 이미지'
+      }`
+    : 'AI, EPS, SVG, PDF, PSD 파일을 열어 확대 검수';
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-slate-100">
-      <div className="flex min-h-12 flex-shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
+    <div className="flex h-full min-h-0 w-full flex-col bg-[#fbfcfd] bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.08)_1px,transparent_0)] [background-size:22px_22px]">
+      <div className="flex min-h-14 flex-shrink-0 flex-wrap items-center gap-2 border-b border-slate-200/80 bg-white/90 px-4 py-2 backdrop-blur">
         <button
           onClick={onGoHome}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 transition hover:bg-slate-50"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 transition hover:bg-slate-50"
         >
           <Home className="h-4 w-4" />
           홈
         </button>
 
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <div className="rounded-lg bg-slate-900 p-2 text-white">
+          <div className="rounded-xl bg-slate-950 p-2 text-white shadow-sm">
             <FileImage className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-black text-slate-950">
-              {viewer ? viewer.file.name : '일러스트 뷰어'}
+            <p className="truncate text-sm font-black tracking-tight text-slate-950">
+              {viewer ? viewer.file.name : '뷰어'}
             </p>
-            <p className="truncate text-[11px] font-bold text-slate-400">
-              {viewer
-                ? `${extensionOf(viewer.file).toUpperCase()} · ${formatSize(viewer.file.size)} · ${viewer.converted ? 'PDF 미리보기' : '원본 벡터'}`
-                : 'AI, EPS, SVG, PDF 파일을 열어 확대 검수'}
+            <p className="truncate text-[11px] font-semibold text-slate-400">
+              {viewerMeta}
             </p>
           </div>
         </div>
 
         {viewer && (
           <div className="flex flex-wrap items-center gap-1.5">
+            {viewer.pageCount > 1 && (
+              <div className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-1">
+                <button
+                  onClick={() => setPage(v => Math.max(1, v - 1))}
+                  className="rounded-md p-1.5 text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
+                  disabled={page <= 1}
+                  title="이전 페이지"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="min-w-14 text-center text-[11px] font-black text-slate-600">{page} / {viewer.pageCount}</span>
+                <button
+                  onClick={() => setPage(v => Math.min(viewer.pageCount, v + 1))}
+                  className="rounded-md p-1.5 text-slate-500 transition hover:bg-slate-50 disabled:opacity-30"
+                  disabled={page >= viewer.pageCount}
+                  title="다음 페이지"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+            {viewer.mode === 'pdf' && (
+              <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1">
+                <button
+                  onClick={() => setRenderMode('native')}
+                  className={cn(
+                    'rounded-md px-2.5 py-1.5 text-[11px] font-black transition',
+                    renderMode === 'native' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  )}
+                >
+                  PDF
+                </button>
+                <button
+                  onClick={() => setRenderMode('image')}
+                  className={cn(
+                    'rounded-md px-2.5 py-1.5 text-[11px] font-black transition',
+                    renderMode === 'image' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  )}
+                >
+                  이미지
+                </button>
+              </div>
+            )}
             <button onClick={() => setZoom(z => Math.max(25, z - 25))} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50" title="축소"><ZoomOut className="h-4 w-4" /></button>
             <span className="min-w-14 rounded-lg bg-slate-100 px-3 py-2 text-center text-xs font-black text-slate-700">{zoomLabel}</span>
             <button onClick={() => setZoom(z => Math.min(800, z + 25))} className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50" title="확대"><ZoomIn className="h-4 w-4" /></button>
@@ -270,15 +526,15 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
       </AnimatePresence>
 
       {!viewer ? (
-        <div className="min-h-0 flex-1 p-4">
+        <div className="min-h-0 flex-1 p-4 sm:p-6">
           <div
             onDragOver={e => { e.preventDefault(); setDragging(true); }}
             onDragLeave={() => setDragging(false)}
             onDrop={e => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
             onClick={() => inputRef.current?.click()}
             className={cn(
-              'flex h-full min-h-[420px] cursor-pointer select-none flex-col items-center justify-center gap-4 rounded-3xl border bg-white transition-all',
-              dragging ? 'border-slate-500 bg-slate-50 shadow-lg' : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white/80'
+              'flex h-full min-h-[420px] cursor-pointer select-none flex-col items-center justify-center gap-4 rounded-3xl border bg-white/85 transition-all shadow-sm',
+              dragging ? 'border-slate-500 bg-slate-50 shadow-lg' : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
             )}
           >
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-5 text-slate-400 shadow-sm">
@@ -286,26 +542,131 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
             </div>
             <div className="text-center">
               <p className="text-base font-black text-slate-800">파일을 드래그하거나 클릭해서 열기</p>
-              <p className="mt-2 text-xs font-bold tracking-wide text-slate-400">.ai · .eps · .svg · .pdf</p>
+              <p className="mt-2 text-xs font-bold tracking-wide text-slate-400">.ai · .eps · .svg · .pdf · .psd</p>
+            </div>
+          </div>
+        </div>
+      ) : viewer.mode === 'psd' ? (
+        <div className="flex min-h-0 flex-1 bg-transparent">
+          <aside className="flex w-80 flex-shrink-0 flex-col border-r border-slate-200 bg-white">
+            <div className="border-b border-slate-200 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-black text-slate-900">PSD 레이어</p>
+                  <p className="mt-1 text-[10px] font-bold text-slate-400">
+                    텍스트 {viewer.psd?.textLayerCount || 0}개 · 전체 {viewer.psd?.layerCount || 0}개
+                  </p>
+                </div>
+                <Layers className="h-4 w-4 text-slate-400" />
+              </div>
+              <button
+                onClick={() => setActiveLayerId(null)}
+                disabled={!activeLayerId}
+                className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-black text-slate-600 transition hover:bg-slate-50 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-white"
+              >
+                <X className="h-3.5 w-3.5" />
+                레이어 선택 해제
+              </button>
+              <input
+                value={psdQuery}
+                onChange={e => setPsdQuery(e.target.value)}
+                placeholder="레이어 또는 텍스트 검색"
+                className="mt-3 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 outline-none transition focus:border-slate-400 focus:bg-white"
+              />
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto p-2">
+              {filteredPsdLayers.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-200 p-4 text-center text-xs font-bold text-slate-400">
+                  검색 결과 없음
+                </div>
+              ) : (
+                filteredPsdLayers.map(layer => (
+                  <button
+                    key={layer.id}
+                    onClick={() => setActiveLayerId(current => current === layer.id ? null : layer.id)}
+                    className={cn(
+                      'mb-1 flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition',
+                      activeLayerId === layer.id
+                        ? 'border-slate-400 bg-slate-100'
+                        : 'border-transparent hover:border-slate-200 hover:bg-slate-50',
+                      layer.hidden && 'opacity-55'
+                    )}
+                    style={{ paddingLeft: `${8 + layer.depth * 14}px` }}
+                  >
+                    <div className="mt-0.5 flex-shrink-0 text-slate-400">
+                      {layer.hidden ? <EyeOff className="h-3.5 w-3.5" /> : layer.text ? <Type className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[11px] font-black text-slate-700">{layer.name}</p>
+                      {layer.text && <p className="mt-1 line-clamp-2 text-[10px] font-semibold leading-snug text-slate-500">{layer.text}</p>}
+                      {layer.bbox && (
+                        <p className="mt-1 text-[9px] font-bold text-slate-400">
+                          {Math.round(layer.bbox.width)}×{Math.round(layer.bbox.height)} px
+                        </p>
+                      )}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </aside>
+
+          <div className="min-h-0 flex-1 overflow-auto p-4">
+            <div
+              className="relative mx-auto bg-white shadow-2xl"
+              style={{
+                width: `${zoom}%`,
+                maxWidth: zoom <= 100 ? `${viewer.psd?.width || 1}px` : undefined,
+                minWidth: zoom > 100 ? `${zoom}%` : undefined,
+              }}
+            >
+              <img src={viewer.sourceUrl} alt={viewer.file.name} className="block h-auto w-full select-none" draggable={false} />
+              {activeLayer?.bbox && viewer.psd && (
+                <div
+                  className="pointer-events-none absolute border-2 border-rose-500 bg-rose-500/10 shadow-[0_0_0_9999px_rgba(15,23,42,0.10)]"
+                  style={{
+                    left: `${(activeLayer.bbox.left / viewer.psd.width) * 100}%`,
+                    top: `${(activeLayer.bbox.top / viewer.psd.height) * 100}%`,
+                    width: `${(activeLayer.bbox.width / viewer.psd.width) * 100}%`,
+                    height: `${(activeLayer.bbox.height / viewer.psd.height) * 100}%`,
+                  }}
+                >
+                  <div className="absolute left-0 top-0 -translate-y-full rounded-t-md bg-rose-600 px-2 py-1 text-[10px] font-black text-white">
+                    {activeLayer.name}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-auto bg-[radial-gradient(circle_at_1px_1px,#cbd5e1_1px,transparent_0)] [background-size:18px_18px] p-4">
+        <div className="min-h-0 flex-1 overflow-auto p-4">
           <div
             className="mx-auto bg-white shadow-2xl"
             style={{
               width: `${zoom}%`,
               minWidth: zoom > 100 ? `${zoom}%` : undefined,
-              height: viewer.mode === 'pdf' ? '100%' : undefined,
-              minHeight: viewer.mode === 'pdf' ? '720px' : undefined,
+              height: viewer.mode === 'pdf' && renderMode === 'native' ? '100%' : undefined,
+              minHeight: viewer.mode === 'pdf' && renderMode === 'native' ? '720px' : undefined,
             }}
           >
-            {viewer.mode === 'svg' || viewer.mode === 'image' ? (
-              <img src={viewer.sourceUrl} alt={viewer.file.name} className="block h-auto w-full select-none" draggable={false} />
+            {viewer.mode === 'svg' || viewer.mode === 'image' || (viewer.mode === 'pdf' && renderMode === 'image') ? (
+              renderingImage || (viewer.mode === 'pdf' && renderMode === 'image' && !pdfImageUrl) ? (
+                <div className="flex min-h-[520px] items-center justify-center text-sm font-black text-slate-400">
+                  이미지 렌더 중...
+                </div>
+              ) : (
+                <img
+                  src={viewer.mode === 'pdf' ? pdfImageUrl : viewer.sourceUrl}
+                  alt={viewer.file.name}
+                  className="block h-auto w-full select-none"
+                  draggable={false}
+                />
+              )
             ) : (
               <iframe
-                src={viewerSrc(viewer.sourceUrl)}
+                src={viewerSrcForPage(viewer.sourceUrl, page)}
                 title={viewer.file.name}
                 className="h-full min-h-[720px] w-full border-0 bg-white"
               />
@@ -317,7 +678,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
       <input
         ref={inputRef}
         type="file"
-        accept=".ai,.eps,.svg,.pdf"
+        accept=".ai,.eps,.svg,.pdf,.psd"
         className="hidden"
         onChange={e => handleFiles(e.target.files)}
       />
