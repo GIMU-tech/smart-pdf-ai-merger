@@ -21,7 +21,7 @@ jobs:
         run: |
           test -n "$HF_TOKEN"
           git lfs install
-          git remote add hf https://KOOHAWN:${HF_TOKEN}@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt
+          git remote add hf https://__token__:${HF_TOKEN}@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt
           git lfs push hf main || true
           git push --force hf main:main
       - name: Factory reboot Space
@@ -83,4 +83,3 @@ jobs:
           git add docs/hf-space-last-logs.txt
           git commit -m "chore: capture hf space logs [skip ci]" || exit 0
           git push origin HEAD:main
-          PY
