@@ -37,6 +37,7 @@ COPY --from=builder /app/dist ./dist
 # Copy backend server files
 COPY server.cjs ./
 COPY workers/ ./workers/
+COPY lib/ ./lib/
 COPY *.traineddata ./
 
 # Hugging Face Spaces compatibility: Run as non-root user (UID 1000)
