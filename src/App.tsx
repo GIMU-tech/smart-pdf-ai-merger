@@ -27,7 +27,6 @@ import {
   Plus,
   Settings,
   MoreHorizontal,
-  PanelLeft,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { CompareTab } from './features/compare/CompareTab';
@@ -187,11 +186,146 @@ function formatSize(bytes: number) {
 function uniqueWorkspaceItems(items: WorkspaceItem[]) {
   const seen = new Set<string>();
   return items.filter(item => {
-    const key = item.imageMode ? `${item.tab}-${item.imageMode}` : `${item.tab}-${item.title}`;
+    const key = workspaceItemKey(item);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+function workspaceItemKey(item: WorkspaceItem) {
+  return item.imageMode ? `${item.tab}-${item.imageMode}` : `${item.tab}-${item.title}`;
+}
+
+function workspacePreviewText(item: WorkspaceItem) {
+  if (item.tab === 'compare') {
+    return {
+      title: '수정 전후 변경점 확인',
+      desc: '두 PDF를 나란히 놓고 숫자, 문구, 도면 차이를 카드와 표시 영역으로 검수합니다.',
+      meta: '샘플 비교 결과',
+    };
+  }
+  if (item.tab === 'merge') {
+    return {
+      title: '인쇄 파일 한 번에 묶기',
+      desc: 'PDF, AI, 이미지 파일을 순서대로 정리해 하나의 전달용 PDF로 만듭니다.',
+      meta: '샘플 파일 목록',
+    };
+  }
+  if (item.tab === 'outline') {
+    return {
+      title: '출력용 변환 파일 생성',
+      desc: '인쇄 전달에 필요한 변환 작업을 실행하고 결과 파일을 바로 내려받습니다.',
+      meta: '샘플 변환 결과',
+    };
+  }
+  if (item.tab === 'illustrator') {
+    return {
+      title: 'AI, PDF, PSD/PSB 확대 검수',
+      desc: '대지와 레이어를 크게 열어보고 원본 파일을 시각적으로 확인합니다.',
+      meta: 'AI · PS · PDF',
+    };
+  }
+  if (item.imageMode === 'resize') {
+    return {
+      title: '이미지 일괄 크기 변경',
+      desc: '여러 이미지를 지정 폭 기준으로 맞추고 PNG 결과를 생성합니다.',
+      meta: '샘플 결과',
+    };
+  }
+  if (item.imageMode === 'stitch') {
+    return {
+      title: '이미지 세로 이어붙이기',
+      desc: '상세페이지 이미지를 순서대로 쌓아 긴 이미지로 합칩니다.',
+      meta: '샘플 결과',
+    };
+  }
+  if (item.imageMode === 'split') {
+    return {
+      title: '긴 이미지 자르기',
+      desc: '긴 상세 이미지를 원하는 기준으로 나눠 업로드용 파일로 정리합니다.',
+      meta: '샘플 분할 결과',
+    };
+  }
+  return {
+    title: 'HTML 이미지 링크 수집',
+    desc: '상세페이지 HTML에서 이미지 링크를 추출해 제작 자료를 정리합니다.',
+    meta: '샘플 링크 목록',
+  };
+}
+
+function workspacePreviewImagePath(item: WorkspaceItem) {
+  if (item.tab === 'merge') return '/workspace-previews/merge.png';
+  if (item.tab === 'outline') return '/workspace-previews/outline.png';
+  if (item.tab === 'compare') return '/workspace-previews/compare.png';
+  if (item.tab === 'illustrator') return '/workspace-previews/viewer.png';
+  if (item.imageMode === 'resize') return '/workspace-previews/image-resize.png';
+  if (item.imageMode === 'stitch') return '/workspace-previews/image-stitch.png';
+  if (item.imageMode === 'split') return '/workspace-previews/image-split.png';
+  return '/workspace-previews/image-html.png';
+}
+
+function WorkspacePreviewMeta({ item, meta }: { item: WorkspaceItem; meta: string }) {
+  if (item.tab !== 'illustrator') {
+    return <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{meta}</span>;
+  }
+
+  const fileTypes = [
+    { label: 'AI', className: 'bg-[#2b1600] text-[#ff9f1a]' },
+    { label: 'PS', className: 'bg-[#061a33] text-sky-300' },
+    { label: 'PDF', className: 'bg-rose-50 text-rose-600 ring-rose-100' },
+  ];
+
+  return (
+    <span className="flex items-center gap-1" aria-label={meta}>
+      {fileTypes.map(type => (
+        <span
+          key={type.label}
+          className={cn(
+            'flex h-[23px] w-[23px] items-center justify-center rounded-md text-[10px] font-black leading-none shadow-sm ring-1 ring-slate-200',
+            type.className
+          )}
+        >
+          {type.label}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function WorkspaceHoverPreview({ item }: { item: WorkspaceItem }) {
+  const Icon = item.icon;
+  const preview = workspacePreviewText(item);
+  const previewImage = workspacePreviewImagePath(item);
+
+  return (
+    <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-5 hidden w-[440px] max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-3 text-left shadow-[0_24px_70px_rgba(15,23,42,0.18)] ring-1 ring-slate-950/5 lg:block">
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-950">
+              <Icon className={cn('h-4 w-4', item.color)} />
+            </span>
+            <span className="text-[11px] font-black text-slate-900">{item.title}</span>
+          </div>
+          <WorkspacePreviewMeta item={item} meta={preview.meta} />
+        </div>
+        <div className="relative aspect-[16/9] overflow-hidden bg-slate-100">
+          <img
+            src={previewImage}
+            alt={`${preview.title} 화면 미리보기`}
+            className="h-full w-full object-contain object-top"
+            draggable={false}
+          />
+          <div className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-slate-950/5" />
+        </div>
+      </div>
+      <div className="mt-3 px-1">
+        <p className="text-sm font-black leading-5 text-slate-950">{preview.title}</p>
+        <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">{preview.desc}</p>
+      </div>
+    </div>
+  );
 }
 
 const MERGE_EXTENSIONS = ['pdf', 'ai', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
@@ -260,6 +394,7 @@ async function addImagePageToPdf(target: PDFDocument, file: File) {
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('home');
   const [imageInitialMode, setImageInitialMode] = useState<ImageToolMode>('resize');
+  const [hoveredWorkspaceKey, setHoveredWorkspaceKey] = useState<string | null>(null);
 
   // ── Merge tab state ──
   const [mergeFiles, setMergeFiles] = useState<FileItem[]>([]);
@@ -495,13 +630,13 @@ export default function App() {
     }
   };
 
-  const navItems: { tab: AppTab; label: string }[] = [
-    { tab: 'home', label: '홈' },
-    { tab: 'merge', label: 'PDF 병합' },
-    { tab: 'outline', label: '인쇄용 변환' },
-    { tab: 'compare', label: 'PDF 비교' },
-    { tab: 'illustrator', label: '뷰어' },
-    { tab: 'images', label: '이미지 툴킷' },
+  const navItems: { tab: AppTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { tab: 'home', label: '홈', icon: Home },
+    { tab: 'merge', label: '병합', icon: Files },
+    { tab: 'outline', label: '출력', icon: Printer },
+    { tab: 'compare', label: '비교', icon: Search },
+    { tab: 'illustrator', label: '뷰어', icon: FileImage },
+    { tab: 'images', label: '이미지', icon: Images },
   ];
 
   const downloadOutlineItem = (item: DownloadItem) => {
@@ -528,34 +663,34 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#fbfcfd] text-slate-950 flex flex-col bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.08)_1px,transparent_0)] [background-size:22px_22px]" style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}>
+    <div className="min-h-screen bg-[#fbfcfd] text-slate-950 flex flex-col bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.025)_1px,transparent_0)] [background-size:22px_22px]" style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}>
 
       {/* ── Top bar ── */}
       {activeTab !== 'illustrator' && activeTab !== 'home' && (
-      <header className="border-b border-slate-200/80 bg-white/90 px-4 sm:px-6 h-14 flex items-center justify-between flex-shrink-0 backdrop-blur">
-        <button onClick={() => setActiveTab('home')} className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-slate-950 rounded-xl flex items-center justify-center shadow-sm">
-            <FilePlus2 className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-sm font-black tracking-tight">Print Studio Desk</span>
+      <header className="h-14 flex-shrink-0 border-b border-slate-200/80 bg-white/95 px-4 backdrop-blur">
+        <div className="flex h-full items-center justify-between gap-4">
+        <button onClick={() => setActiveTab('home')} className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm" title="홈">
+          <FilePlus2 className="h-4 w-4" />
         </button>
-        <nav className="flex items-center gap-1 overflow-x-auto">
-          {navItems.map(({ tab, label }) => (
+        <nav className="flex min-w-0 items-center justify-end gap-2 overflow-x-auto">
+          {navItems.map(({ tab, label, icon: NavIcon }) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
-                'whitespace-nowrap px-3 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition-all',
+                'group flex h-9 flex-shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 text-xs font-bold leading-none transition',
                 activeTab === tab
-                  ? 'bg-slate-950 text-white shadow-sm'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  ? 'bg-slate-100 text-slate-950'
+                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
               )}
+              title={label}
             >
-              {tab === 'home' && <Home className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />}
-              {label}
+              <NavIcon className="h-3.5 w-3.5" />
+              <span>{label}</span>
             </button>
           ))}
         </nav>
+        </div>
       </header>
       )}
 
@@ -619,13 +754,8 @@ export default function App() {
           </aside>
 
           <section className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.08)_1px,transparent_0)] [background-size:22px_22px]" />
-            <div className="relative flex h-14 items-center justify-between px-6">
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-black text-slate-500 shadow-sm">
-                <PanelLeft className="h-3.5 w-3.5" />
-                Print Studio Desk
-              </div>
-            </div>
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.025)_1px,transparent_0)] [background-size:22px_22px]" />
+            <div className="relative h-14 flex-shrink-0" aria-hidden="true" />
 
             <div className="relative flex flex-1 flex-col items-center justify-center px-6 py-8">
               <motion.div
@@ -636,34 +766,40 @@ export default function App() {
                 <div className="mx-auto max-w-[820px] px-1 text-center">
                   <div className="flex flex-col items-center">
                     <div className="min-w-0">
-                      <h1 className="text-[32px] font-black tracking-tight text-slate-950 sm:text-[42px]">
-                        디자인 통합 작업 허브
+                      <h1 className="text-[30px] font-extrabold tracking-tight text-slate-950 sm:text-[38px]">
+                        디자인 통합 작업 허브 2.0
                       </h1>
-                      <p className="mt-2 text-sm font-semibold text-slate-500">
+                      <p className="mt-2 text-sm font-medium text-slate-500">
                         파일 정리, 변환, 검수, 이미지 작업을 한 곳에서 시작합니다.
                       </p>
                     </div>
                   </div>
                 </div>
 
-                <div className="mx-auto mt-12 flex w-fit max-w-full flex-wrap justify-center gap-y-5">
+                <div className="mx-auto mt-14 flex w-fit max-w-full flex-wrap justify-center gap-y-5 rounded-[28px] border border-slate-200/80 bg-white/85 px-7 py-6 shadow-[0_24px_90px_rgba(15,23,42,0.10)] ring-1 ring-white/80 backdrop-blur md:px-8">
                   {workspaceGroups.map(group => (
-                    <div key={group.label} className="w-fit min-w-0 px-3 py-2 lg:border-r lg:border-slate-200/80 lg:py-0 first:lg:pl-0 last:border-r-0 last:lg:pr-0">
-                      <p className="mb-3 text-center text-xs font-black text-slate-400">{group.label}</p>
-                      <div className="flex flex-wrap justify-center gap-2">
+                    <div key={group.label} className="relative w-fit min-w-0 px-5 py-2 after:hidden after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-300/85 lg:py-1 lg:after:block first:lg:pl-0 last:lg:pr-0 last:after:hidden">
+                      <p className="mb-4 text-center text-xs font-black text-slate-500">{group.label}</p>
+                      <div className="flex flex-wrap justify-center gap-3">
                         {uniqueWorkspaceItems(group.items).map(item => {
                           const Icon = item.icon;
+                          const itemKey = workspaceItemKey(item);
+                          const previewVisible = hoveredWorkspaceKey === itemKey;
                           return (
                             <button
-                              key={`${item.tab}-${item.title}`}
+                              key={itemKey}
                               onClick={() => openWorkspaceItem(item)}
-                              className="group flex w-[96px] flex-col items-center gap-2 rounded-2xl px-2 py-3 text-center transition hover:bg-white hover:shadow-[0_12px_36px_rgba(15,23,42,0.08)]"
+                              onMouseEnter={() => setHoveredWorkspaceKey(itemKey)}
+                              onMouseLeave={() => setHoveredWorkspaceKey(current => current === itemKey ? null : current)}
+                              onFocus={() => setHoveredWorkspaceKey(itemKey)}
+                              onBlur={() => setHoveredWorkspaceKey(current => current === itemKey ? null : current)}
+                              className="group relative flex w-[98px] flex-col items-center gap-2 rounded-2xl px-2 py-2.5 text-center transition hover:bg-slate-50/90 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
                             >
-                              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5">
+                              {previewVisible && <WorkspaceHoverPreview item={item} />}
+                              <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200/90 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.08)] transition group-hover:-translate-y-0.5 group-hover:border-slate-300 group-hover:shadow-[0_14px_34px_rgba(15,23,42,0.12)]">
                                 <Icon className={cn('h-5 w-5', item.color)} />
                               </span>
-                              <span className="text-xs font-black text-slate-900">{item.title}</span>
-                              <span className="min-h-8 break-keep text-[10px] font-semibold leading-4 text-slate-400">{item.desc}</span>
+                              <span className="text-xs font-black text-slate-950">{item.title}</span>
                             </button>
                           );
                         })}
