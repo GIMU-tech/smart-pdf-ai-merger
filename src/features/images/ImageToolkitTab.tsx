@@ -1091,9 +1091,8 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
         </aside>
 
         <main className="min-h-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 shadow-sm">
-          <div className="border-b border-slate-100 px-5 py-4">
-            <div className="grid gap-3 2xl:grid-cols-[minmax(320px,0.78fr)_minmax(560px,1.55fr)]">
-              <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 2xl:col-start-1">
+          <div className="grid min-h-full gap-4 p-5 2xl:grid-cols-[minmax(320px,0.78fr)_minmax(560px,1.55fr)] 2xl:grid-rows-[auto_auto_1fr] 2xl:items-start">
+              <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 2xl:col-start-1 2xl:row-start-1">
                 <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <ActiveIcon className="h-4 w-4 text-slate-900" />
@@ -1124,12 +1123,8 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                         : 'HTML 수집 실행'}
               </button>
               </div>
-            </div>
-          </div>
-
-          <div className="grid gap-4 p-5 2xl:grid-cols-[minmax(320px,0.78fr)_minmax(560px,1.55fr)] 2xl:items-start">
             {errorMessage && (
-              <div className="flex items-center gap-2 rounded-md border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-600 2xl:col-start-1 2xl:row-start-1">
+              <div className="flex items-center gap-2 rounded-md border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-600 2xl:col-start-1 2xl:row-start-2">
                 <AlertCircle className="h-4 w-4 flex-shrink-0" />
                 <span className="flex-1">{errorMessage}</span>
                 <button type="button" onClick={() => setErrorMessage(null)} className="text-red-400 hover:text-red-700">
@@ -1139,7 +1134,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
             )}
 
             {statusMessage && (
-              <div className="rounded-md border border-gray-100 bg-gray-50 px-4 py-3 text-sm font-semibold text-gray-600 2xl:col-start-1 2xl:row-start-1">
+              <div className="rounded-md border border-gray-100 bg-gray-50 px-4 py-3 text-sm font-semibold text-gray-600 2xl:col-start-1 2xl:row-start-2">
                 {statusMessage}
               </div>
             )}
@@ -1147,8 +1142,8 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
             {activeMode === 'html' ? (
               <section
                 className={cn(
-                  'grid gap-3 2xl:col-start-1 2xl:row-start-1',
-                  errorMessage || statusMessage ? '2xl:mt-14' : ''
+                  'grid gap-3 2xl:col-start-1',
+                  errorMessage || statusMessage ? '2xl:row-start-3' : '2xl:row-start-2'
                 )}
               >
                 <div className="flex flex-wrap gap-2">
@@ -1207,8 +1202,8 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                 }}
                 onClick={() => inputRef.current?.click()}
                 className={cn(
-                  'flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border py-5 text-center transition 2xl:col-start-1 2xl:row-start-1',
-                  errorMessage || statusMessage ? '2xl:mt-14' : '',
+                  'flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border py-5 text-center transition 2xl:col-start-1',
+                  errorMessage || statusMessage ? '2xl:row-start-3' : '2xl:row-start-2',
                   dragging ? 'border-gray-400 bg-gray-50' : 'border-dashed border-gray-200 hover:border-gray-300 hover:bg-gray-50/60'
                 )}
               >
@@ -1226,7 +1221,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
               </div>
             )}
 
-            <section className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-100/80 2xl:col-start-2 2xl:row-start-1 2xl:row-span-3 2xl:-mt-[124px] 2xl:h-[calc(100vh-92px)] 2xl:min-h-[824px]">
+            <section className="flex h-[660px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-100/80 2xl:col-start-2 2xl:row-start-1 2xl:row-span-4 2xl:h-full 2xl:min-h-[calc(100vh-9rem)] 2xl:self-stretch">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white/90 px-4 py-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -1427,8 +1422,8 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
 
             <section
               className={cn(
-                'rounded-md border border-gray-100 2xl:col-start-1 2xl:row-start-1',
-                errorMessage || statusMessage ? '2xl:mt-[210px]' : '2xl:mt-[150px]'
+                'rounded-md border border-gray-100 2xl:col-start-1',
+                errorMessage || statusMessage ? '2xl:row-start-4' : '2xl:row-start-3'
               )}
             >
               <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
