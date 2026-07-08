@@ -32,6 +32,12 @@ jobs:
           from huggingface_hub import HfApi
 
           api = HfApi()
+          api.request_space_hardware(
+              repo_id="KOOHAWN/AI_PDF_TOOLKIt",
+              hardware="cpu-basic",
+              token=os.environ["HF_TOKEN"],
+              sleep_time=172800,
+          )
           runtime = api.restart_space(
               repo_id="KOOHAWN/AI_PDF_TOOLKIt",
               token=os.environ["HF_TOKEN"],
