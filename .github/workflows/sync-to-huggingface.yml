@@ -21,3 +21,20 @@ jobs:
           git remote add hf https://KOOHAWN:${HF_TOKEN}@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt
           git lfs push hf main || true
           git push --force hf main:main
+      - name: Factory reboot Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          test -n "$HF_TOKEN"
+          python -m pip install -U huggingface_hub
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+
+          runtime = HfApi().restart_space(
+              repo_id="KOOHAWN/AI_PDF_TOOLKIt",
+              token=os.environ["HF_TOKEN"],
+              factory_reboot=True,
+          )
+          print(runtime)
+          PY
