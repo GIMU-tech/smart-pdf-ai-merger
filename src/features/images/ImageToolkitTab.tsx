@@ -1226,7 +1226,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
               </div>
             )}
 
-            <section className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-100/80 2xl:col-start-2 2xl:row-start-1 2xl:row-span-3 2xl:-mt-[150px] 2xl:h-[calc(100vh-66px)] 2xl:min-h-[850px]">
+            <section className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-100/80 2xl:col-start-2 2xl:row-start-1 2xl:row-span-3 2xl:-mt-[124px] 2xl:h-[calc(100vh-92px)] 2xl:min-h-[824px]">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white/90 px-4 py-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
