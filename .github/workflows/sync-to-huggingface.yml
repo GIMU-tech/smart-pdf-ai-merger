@@ -4,6 +4,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   sync-to-hub:
     runs-on: ubuntu-latest
@@ -37,4 +40,47 @@ jobs:
               token=os.environ["HF_TOKEN"],
           )
           print(runtime)
+      - name: Capture Space logs
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          test -n "$HF_TOKEN"
+          python -m pip install -U huggingface_hub
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          out = Path("docs/hf-space-last-logs.txt")
+          out.parent.mkdir(parents=True, exist_ok=True)
+
+          parts = []
+          for label, kwargs in [
+              ("BUILD LOGS", {"build": True}),
+              ("RUNTIME LOGS", {}),
+          ]:
+              parts.append(f"===== {label} =====\n")
+              try:
+                  lines = []
+                  for idx, line in enumerate(api.fetch_space_logs("KOOHAWN/AI_PDF_TOOLKIt", **kwargs)):
+                      lines.append(line)
+                      if idx >= 240:
+                          break
+                  parts.append("".join(lines) or "(no logs returned)\n")
+              except Exception as exc:
+                  parts.append(f"ERROR: {type(exc).__name__}: {exc}\n")
+              parts.append("\n")
+
+          out.write_text("".join(parts), encoding="utf-8")
+          PY
+      - name: Commit captured Space logs
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/hf-space-last-logs.txt
+          git commit -m "chore: capture hf space logs [skip ci]" || exit 0
+          git push
           PY
