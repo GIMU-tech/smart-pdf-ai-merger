@@ -29,9 +29,16 @@ jobs:
           python -m pip install -U huggingface_hub
           python - <<'PY'
           import os
+          import time
           from huggingface_hub import HfApi
 
-          runtime = HfApi().restart_space(
+          api = HfApi()
+          api.pause_space(
+              repo_id="KOOHAWN/AI_PDF_TOOLKIt",
+              token=os.environ["HF_TOKEN"],
+          )
+          time.sleep(5)
+          runtime = api.restart_space(
               repo_id="KOOHAWN/AI_PDF_TOOLKIt",
               token=os.environ["HF_TOKEN"],
               factory_reboot=True,
