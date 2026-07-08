@@ -103,8 +103,8 @@ const featureCards: FeatureCard[] = [
     tab: 'illustrator',
     title: '뷰어',
     eyebrow: '벡터 확인',
-    description: 'AI, EPS, SVG, PDF, PSD 파일을 빠르게 열어 확대 검수하고 원본을 내려받습니다.',
-    formats: 'AI, EPS, SVG, PDF, PSD',
+    description: 'AI, EPS, SVG, PDF, PSD, PSB 파일을 빠르게 열어 확대 검수하고 원본을 내려받습니다.',
+    formats: 'AI, EPS, SVG, PDF, PSD, PSB',
     purpose: '파일 미리보기, 확대 검수',
     cta: '파일 열어보기',
     accent: 'from-emerald-500 to-teal-400',
@@ -162,7 +162,7 @@ const workspaceGroups: Array<{
   {
     label: '파일 확인',
     items: [
-      { tab: 'illustrator', title: '뷰어', desc: 'AI, PDF, PSD 확대 검수', icon: FileImage, color: 'text-emerald-500' },
+      { tab: 'illustrator', title: '뷰어', desc: 'AI, PDF, PSD/PSB 확대 검수', icon: FileImage, color: 'text-emerald-500' },
     ],
   },
   {

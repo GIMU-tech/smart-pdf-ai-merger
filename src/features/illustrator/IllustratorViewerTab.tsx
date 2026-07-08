@@ -56,7 +56,8 @@ type IllustratorViewerTabProps = {
   onGoHome?: () => void;
 };
 
-const SUPPORTED_EXTENSIONS = ['ai', 'eps', 'svg', 'pdf', 'psd'];
+const SUPPORTED_EXTENSIONS = ['ai', 'eps', 'svg', 'pdf', 'psd', 'psb'];
+const PSD_LIKE_EXTENSIONS = new Set(['psd', 'psb']);
 
 function formatSize(bytes: number) {
   if (bytes === 0) return '0 B';
@@ -255,7 +256,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
       const psd = readPsd(buffer, { skipThumbnail: true });
       const compositeCanvas = makePsdPreviewCanvas(psd);
       if (!compositeCanvas) {
-        throw new Error('이 PSD에는 표시 가능한 합성 미리보기 이미지가 없습니다.');
+        throw new Error('이 PSD/PSB에는 표시 가능한 합성 미리보기 이미지가 없습니다.');
       }
 
       const layers = flattenPsdLayers(psd.children);
@@ -277,7 +278,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
       });
       setActiveLayerId(null);
     } catch (err: any) {
-      setError(err.message || 'PSD 파일을 읽지 못했습니다.');
+      setError(err.message || 'PSD/PSB 파일을 읽지 못했습니다.');
     } finally {
       setLoading(false);
     }
@@ -286,7 +287,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
   const openDirect = async (file: File) => {
     const ext = extensionOf(file);
     if (!SUPPORTED_EXTENSIONS.includes(ext)) {
-      setError('AI, EPS, SVG, PDF, PSD 파일만 열 수 있습니다.');
+      setError('AI, EPS, SVG, PDF, PSD, PSB 파일만 열 수 있습니다.');
       return;
     }
 
@@ -298,7 +299,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
     setPsdQuery('');
     setActiveLayerId(null);
 
-    if (ext === 'psd') {
+    if (PSD_LIKE_EXTENSIONS.has(ext)) {
       await openPsd(file);
       return;
     }
@@ -408,7 +409,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
               ? '원본 PDF'
               : '원본 이미지'
       }`
-    : 'AI, EPS, SVG, PDF, PSD 파일을 열어 확대 검수';
+    : 'AI, EPS, SVG, PDF, PSD, PSB 파일을 열어 확대 검수';
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[#fbfcfd] bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.08)_1px,transparent_0)] [background-size:22px_22px]">
@@ -542,7 +543,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
             </div>
             <div className="text-center">
               <p className="text-base font-black text-slate-800">파일을 드래그하거나 클릭해서 열기</p>
-              <p className="mt-2 text-xs font-bold tracking-wide text-slate-400">.ai · .eps · .svg · .pdf · .psd</p>
+              <p className="mt-2 text-xs font-bold tracking-wide text-slate-400">.ai · .eps · .svg · .pdf · .psd · .psb</p>
             </div>
           </div>
         </div>
@@ -552,7 +553,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
             <div className="border-b border-slate-200 p-3">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <p className="text-xs font-black text-slate-900">PSD 레이어</p>
+                  <p className="text-xs font-black text-slate-900">{extensionOf(viewer.file).toUpperCase()} 레이어</p>
                   <p className="mt-1 text-[10px] font-bold text-slate-400">
                     텍스트 {viewer.psd?.textLayerCount || 0}개 · 전체 {viewer.psd?.layerCount || 0}개
                   </p>
@@ -678,7 +679,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
       <input
         ref={inputRef}
         type="file"
-        accept=".ai,.eps,.svg,.pdf,.psd"
+        accept=".ai,.eps,.svg,.pdf,.psd,.psb"
         className="hidden"
         onChange={e => handleFiles(e.target.files)}
       />
