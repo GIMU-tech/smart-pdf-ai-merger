@@ -1,9 +1,10 @@
 ===== BUILD LOGS =====
-===== Build Queued at 2026-07-08 13:17:06 / Commit SHA: 17fd08d =====
+===== Build Queued at 2026-07-08 13:20:14 / Commit SHA: b00cd9e =====
 --> FROM docker.io/library/node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0DONE 0.0s
---> COPY package*.json ./CACHED
 --> WORKDIR /appCACHED
+--> COPY package*.json ./CACHED
 --> RUN npm installCACHED
+
 --> Restoring cache
 ===== RUNTIME LOGS =====
 (no logs returned)
