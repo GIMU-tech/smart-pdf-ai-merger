@@ -20,10 +20,34 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           test -n "$HF_TOKEN"
-          git lfs install
-          git remote add hf https://__token__:${HF_TOKEN}@huggingface.co/spaces/KOOHAWN/AI_PDF_TOOLKIt
-          git lfs push hf main || true
-          git push --force hf main:main
+          python -m pip install -U huggingface_hub
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          api.upload_folder(
+              repo_id="KOOHAWN/AI_PDF_TOOLKIt",
+              repo_type="space",
+              folder_path=".",
+              path_in_repo=".",
+              commit_message="Sync from GitHub Actions",
+              ignore_patterns=[
+                  ".git/*",
+                  ".github/*",
+                  ".env*",
+                  "node_modules/*",
+                  "dist/*",
+                  "build/*",
+                  "coverage/*",
+                  "release/*",
+                  "temp_uploads/*",
+                  "bin/gs/*",
+                  "bin/mutool.exe",
+                  "*.log",
+              ],
+          )
+          PY
       - name: Factory reboot Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
