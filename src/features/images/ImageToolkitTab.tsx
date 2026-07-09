@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from 'react';
 import JSZip from 'jszip';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -301,6 +301,8 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
   const [activeMode, setActiveMode] = useState<ImageToolMode>(initialMode);
   const [filesByMode, setFilesByMode] = useState<FilesByMode>(() => createEmptyFilesByMode());
   const [dragging, setDragging] = useState(false);
+  const [fileSortingId, setFileSortingId] = useState<string | null>(null);
+  const [htmlDragging, setHtmlDragging] = useState(false);
   const [htmlText, setHtmlText] = useState('');
   const [htmlFile, setHtmlFile] = useState<File | null>(null);
   const [htmlBaseUrl, setHtmlBaseUrl] = useState('');
@@ -374,11 +376,13 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
   const selectedPreviewOutput = previewableOutputFiles.find(file => file.id === previewOutputId) || previewableOutputFiles[0];
   const splitPreviewOutputs = activeMode === 'split' ? previewableOutputFiles : [];
   const visiblePreviewOutputs =
-    activeMode === 'split' && splitPreviewOutputs.length > 0
-      ? splitPreviewOutputs
-      : selectedPreviewOutput
-        ? [selectedPreviewOutput]
-        : [];
+    activeMode === 'html' && previewableOutputFiles.length > 0
+      ? previewableOutputFiles
+      : activeMode === 'split' && splitPreviewOutputs.length > 0
+        ? splitPreviewOutputs
+        : selectedPreviewOutput
+          ? [selectedPreviewOutput]
+          : [];
   const hasPreviewOutput = visiblePreviewOutputs.length > 0;
   const splitPreviewMaxWidth = splitPreviewOutputs.reduce((max, file) => Math.max(max, file.width || 0), 0);
   const previewCanvasWidth =
@@ -511,6 +515,37 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
       };
     });
     resetOutputs();
+  };
+
+  const reorderFile = (sourceId: string | null, targetId: string) => {
+    if (!activeUploadMode || !sourceId || sourceId === targetId) return;
+    setFilesByMode(current => {
+      const currentFiles = current[activeUploadMode];
+      const sourceIndex = currentFiles.findIndex(item => item.id === sourceId);
+      const targetIndex = currentFiles.findIndex(item => item.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return current;
+
+      const next = [...currentFiles];
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return {
+        ...current,
+        [activeUploadMode]: next,
+      };
+    });
+    resetOutputs();
+  };
+
+  const handleHtmlFileDrop = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    setHtmlDragging(false);
+    const droppedFiles = Array.from(event.dataTransfer.files) as File[];
+    const file = droppedFiles.find(item => /\.(html?|txt)$/i.test(item.name) || item.type === 'text/html');
+    if (!file) {
+      setErrorMessage('HTML 파일만 드래그해서 업로드할 수 있습니다.');
+      return;
+    }
+    updateHtmlFile(file);
   };
 
   const updateHtmlFile = (file: File | null) => {
@@ -1160,7 +1195,18 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                   errorMessage || statusMessage ? '2xl:row-start-3' : '2xl:row-start-2'
                 )}
               >
-                <div className="flex flex-wrap gap-2">
+                <div
+                  onDragOver={event => {
+                    event.preventDefault();
+                    setHtmlDragging(true);
+                  }}
+                  onDragLeave={() => setHtmlDragging(false)}
+                  onDrop={handleHtmlFileDrop}
+                  className={cn(
+                    'flex flex-wrap gap-2 rounded-md border p-2 transition',
+                    htmlDragging ? 'border-gray-400 bg-gray-50' : 'border-transparent'
+                  )}
+                >
                   <button
                     type="button"
                     onClick={() => htmlFileInputRef.current?.click()}
@@ -1311,7 +1357,9 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                         'inline-flex rounded-sm shadow-xl',
                         activeMode === 'split'
                           ? 'flex-col border border-gray-300 bg-gray-200/80 p-6'
-                          : 'inline-block border border-gray-300 bg-white p-4'
+                          : activeMode === 'html'
+                            ? 'grid w-[min(1040px,calc(100vw-2rem))] grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4 border border-gray-300 bg-white p-4'
+                            : 'inline-block border border-gray-300 bg-white p-4'
                       )}
                       style={activeMode === 'split' ? { gap: `${splitPreviewGap}px` } : undefined}
                     >
@@ -1322,6 +1370,8 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                             'relative',
                             activeMode === 'split'
                               ? 'overflow-hidden rounded-sm border border-gray-300 bg-white shadow-md ring-1 ring-white/70'
+                              : activeMode === 'html'
+                                ? 'overflow-hidden rounded-md border border-slate-200 bg-white p-2 shadow-sm'
                               : ''
                           )}
                         >
@@ -1334,15 +1384,28 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                           <PreviewImage
                             source={file.blob as Blob}
                             alt={file.displayName}
-                            className="block h-auto max-h-none max-w-none object-contain"
+                            className={cn(
+                              'block object-contain',
+                              activeMode === 'html' ? 'h-auto w-full max-w-full' : 'h-auto max-h-none max-w-none'
+                            )}
                             style={{
                               width: `${Math.round((
                                 activeMode === 'split'
                                   ? Math.min(Math.max(file.width || previewCanvasWidth, 220), 1200)
+                                  : activeMode === 'html'
+                                    ? Math.min(Math.max(file.width || 220, 120), 220)
                                   : previewCanvasWidth
                               ) * previewZoom / 100)}px`,
                             }}
                           />
+                          {activeMode === 'html' && (
+                            <div className="mt-2 min-w-0 border-t border-slate-100 pt-2">
+                              <p className="truncate text-[11px] font-bold text-slate-700">{file.displayName}</p>
+                              <p className="mt-0.5 text-[10px] font-mono text-slate-400">
+                                {file.width && file.height ? `${file.width} x ${file.height}` : file.format?.toUpperCase()}
+                              </p>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1477,7 +1540,29 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
               ) : files.length > 0 ? (
                 <ul className="max-h-[440px] divide-y divide-gray-100 overflow-y-auto">
                   {files.map((item, index) => (
-                    <li key={item.id} className="grid grid-cols-[26px_52px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3">
+                    <li
+                      key={item.id}
+                      draggable
+                      onDragStart={event => {
+                        setFileSortingId(item.id);
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData('text/plain', item.id);
+                      }}
+                      onDragOver={event => {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = 'move';
+                      }}
+                      onDrop={event => {
+                        event.preventDefault();
+                        reorderFile(fileSortingId || event.dataTransfer.getData('text/plain'), item.id);
+                        setFileSortingId(null);
+                      }}
+                      onDragEnd={() => setFileSortingId(null)}
+                      className={cn(
+                        'grid grid-cols-[26px_52px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-colors',
+                        fileSortingId === item.id ? 'bg-slate-100/80 opacity-70' : 'hover:bg-slate-50/70'
+                      )}
+                    >
                       <span className="text-xs font-mono text-gray-300">{index + 1}</span>
                       <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-md border border-gray-100 bg-gray-50 p-1">
                         <PreviewImage source={item.file} alt={item.file.name} />

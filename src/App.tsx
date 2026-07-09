@@ -28,6 +28,8 @@ import {
   Plus,
   Settings,
   MoreHorizontal,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { CompareTab } from './features/compare/CompareTab';
@@ -476,6 +478,7 @@ export default function App() {
   // ── Merge tab state ──
   const [mergeFiles, setMergeFiles] = useState<FileItem[]>([]);
   const [mergeDragging, setMergeDragging] = useState(false);
+  const [mergeSortingId, setMergeSortingId] = useState<string | null>(null);
   const [isMerging, setIsMerging] = useState(false);
   const [mergeOutputName, setMergeOutputName] = useState('');
   const [mergeError, setMergeError] = useState<string | null>(null);
@@ -530,6 +533,32 @@ export default function App() {
     e.preventDefault();
     setMergeDragging(false);
     addMergeFiles(e.dataTransfer.files);
+  };
+
+  const moveMergeFile = (id: string, direction: -1 | 1) => {
+    setMergeFiles(current => {
+      const currentIndex = current.findIndex(item => item.id === id);
+      const nextIndex = currentIndex + direction;
+      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= current.length) return current;
+
+      const next = [...current];
+      [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
+      return next;
+    });
+  };
+
+  const reorderMergeFile = (sourceId: string | null, targetId: string) => {
+    if (!sourceId || sourceId === targetId) return;
+    setMergeFiles(current => {
+      const sourceIndex = current.findIndex(item => item.id === sourceId);
+      const targetIndex = current.findIndex(item => item.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return current;
+
+      const next = [...current];
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
   };
 
   const runMerge = async () => {
@@ -1143,8 +1172,31 @@ export default function App() {
                   const isAi = ext === 'ai';
                   const isPdf = ext === 'pdf';
                   return (
-                    <motion.li key={f.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                      className="flex items-center px-4 py-3 gap-3 group hover:bg-slate-50/70 transition-colors">
+                    <motion.li
+                      key={f.id}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      draggable
+                      onDragStart={event => {
+                        setMergeSortingId(f.id);
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData('text/plain', f.id);
+                      }}
+                      onDragOver={event => {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = 'move';
+                      }}
+                      onDrop={event => {
+                        event.preventDefault();
+                        reorderMergeFile(mergeSortingId || event.dataTransfer.getData('text/plain'), f.id);
+                        setMergeSortingId(null);
+                      }}
+                      onDragEnd={() => setMergeSortingId(null)}
+                      className={cn(
+                        'flex items-center px-4 py-3 gap-3 group transition-colors',
+                        mergeSortingId === f.id ? 'bg-slate-100/80 opacity-70' : 'hover:bg-slate-50/70'
+                      )}
+                    >
                       <span className="text-xs text-gray-300 w-5 text-right flex-shrink-0">{idx + 1}</span>
                       <span className={cn(
                         'text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0',
@@ -1152,6 +1204,38 @@ export default function App() {
                       )}>{isAi ? 'AI' : isPdf ? 'PDF' : ext.toUpperCase()}</span>
                       <span className="flex-1 text-sm text-gray-700 truncate">{f.name}</span>
                       <span className="text-xs text-gray-300 font-mono flex-shrink-0">{formatSize(f.size)}</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => moveMergeFile(f.id, -1)}
+                          disabled={idx === 0}
+                          className={cn(
+                            'rounded-md border border-slate-200 p-1.5 transition',
+                            idx === 0
+                              ? 'cursor-not-allowed text-slate-200'
+                              : 'text-slate-400 hover:bg-white hover:text-slate-900'
+                          )}
+                          aria-label={`${f.name} 위로 이동`}
+                          title="위로 이동"
+                        >
+                          <ArrowUp className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveMergeFile(f.id, 1)}
+                          disabled={idx === mergeFiles.length - 1}
+                          className={cn(
+                            'rounded-md border border-slate-200 p-1.5 transition',
+                            idx === mergeFiles.length - 1
+                              ? 'cursor-not-allowed text-slate-200'
+                              : 'text-slate-400 hover:bg-white hover:text-slate-900'
+                          )}
+                          aria-label={`${f.name} 아래로 이동`}
+                          title="아래로 이동"
+                        >
+                          <ArrowDown className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                       <button onClick={() => setMergeFiles(p => p.filter(x => x.id !== f.id))}
                         className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 transition-all">
                         <Trash2 className="w-3.5 h-3.5" />
