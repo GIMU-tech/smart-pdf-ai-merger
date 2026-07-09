@@ -34,6 +34,8 @@ type PendingFile = {
   metadataError?: string;
 };
 
+type DropInsertPosition = 'before' | 'after';
+
 type UploadFileMode = Exclude<ImageToolMode, 'html'>;
 type FilesByMode = Record<UploadFileMode, PendingFile[]>;
 
@@ -302,6 +304,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
   const [filesByMode, setFilesByMode] = useState<FilesByMode>(() => createEmptyFilesByMode());
   const [dragging, setDragging] = useState(false);
   const [fileSortingId, setFileSortingId] = useState<string | null>(null);
+  const [fileDropTarget, setFileDropTarget] = useState<{ id: string; position: DropInsertPosition } | null>(null);
   const [htmlDragging, setHtmlDragging] = useState(false);
   const [htmlText, setHtmlText] = useState('');
   const [htmlFile, setHtmlFile] = useState<File | null>(null);
@@ -517,7 +520,12 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
     resetOutputs();
   };
 
-  const reorderFile = (sourceId: string | null, targetId: string) => {
+  const getDropInsertPosition = (event: DragEvent<HTMLElement>): DropInsertPosition => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+  };
+
+  const reorderFile = (sourceId: string | null, targetId: string, position: DropInsertPosition = 'before') => {
     if (!activeUploadMode || !sourceId || sourceId === targetId) return;
     setFilesByMode(current => {
       const currentFiles = current[activeUploadMode];
@@ -527,7 +535,9 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
 
       const next = [...currentFiles];
       const [moved] = next.splice(sourceIndex, 1);
-      next.splice(targetIndex, 0, moved);
+      const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      const insertIndex = position === 'after' ? adjustedTargetIndex + 1 : adjustedTargetIndex;
+      next.splice(insertIndex, 0, moved);
       return {
         ...current,
         [activeUploadMode]: next,
@@ -1539,7 +1549,9 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                 </div>
               ) : files.length > 0 ? (
                 <ul className="max-h-[440px] divide-y divide-gray-100 overflow-y-auto">
-                  {files.map((item, index) => (
+                  {files.map((item, index) => {
+                    const isDropTarget = fileDropTarget?.id === item.id && fileSortingId !== item.id;
+                    return (
                     <li
                       key={item.id}
                       draggable
@@ -1551,18 +1563,40 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                       onDragOver={event => {
                         event.preventDefault();
                         event.dataTransfer.dropEffect = 'move';
+                        if (fileSortingId && fileSortingId !== item.id) {
+                          setFileDropTarget({ id: item.id, position: getDropInsertPosition(event) });
+                        }
+                      }}
+                      onDragLeave={event => {
+                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                          setFileDropTarget(current => current?.id === item.id ? null : current);
+                        }
                       }}
                       onDrop={event => {
                         event.preventDefault();
-                        reorderFile(fileSortingId || event.dataTransfer.getData('text/plain'), item.id);
+                        const position = fileDropTarget?.id === item.id ? fileDropTarget.position : getDropInsertPosition(event);
+                        reorderFile(fileSortingId || event.dataTransfer.getData('text/plain'), item.id, position);
                         setFileSortingId(null);
+                        setFileDropTarget(null);
                       }}
-                      onDragEnd={() => setFileSortingId(null)}
+                      onDragEnd={() => {
+                        setFileSortingId(null);
+                        setFileDropTarget(null);
+                      }}
                       className={cn(
-                        'grid grid-cols-[26px_52px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-colors',
-                        fileSortingId === item.id ? 'bg-slate-100/80 opacity-70' : 'hover:bg-slate-50/70'
+                        'relative grid grid-cols-[26px_52px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-all duration-150 ease-out',
+                        fileSortingId === item.id ? 'scale-[0.985] bg-slate-100/80 opacity-60' : 'hover:bg-slate-50/70',
+                        isDropTarget ? 'bg-slate-50 shadow-inner' : ''
                       )}
                     >
+                      {isDropTarget && (
+                        <span
+                          className={cn(
+                            'pointer-events-none absolute left-3 right-3 z-20 h-1 rounded-full bg-slate-950 shadow-[0_0_0_3px_rgba(15,23,42,0.10)]',
+                            fileDropTarget?.position === 'before' ? 'top-0 -translate-y-1/2' : 'bottom-0 translate-y-1/2'
+                          )}
+                        />
+                      )}
                       <span className="text-xs font-mono text-gray-300">{index + 1}</span>
                       <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-md border border-gray-100 bg-gray-50 p-1">
                         <PreviewImage source={item.file} alt={item.file.name} />
@@ -1628,7 +1662,8 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                         </button>
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               ) : (
                 <div className="px-4 py-6 text-sm font-medium text-gray-400">

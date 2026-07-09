@@ -44,6 +44,8 @@ interface FileItem {
   size: number;
 }
 
+type DropInsertPosition = 'before' | 'after';
+
 type DownloadItem = {
   id: string;
   label: string;
@@ -479,6 +481,7 @@ export default function App() {
   const [mergeFiles, setMergeFiles] = useState<FileItem[]>([]);
   const [mergeDragging, setMergeDragging] = useState(false);
   const [mergeSortingId, setMergeSortingId] = useState<string | null>(null);
+  const [mergeDropTarget, setMergeDropTarget] = useState<{ id: string; position: DropInsertPosition } | null>(null);
   const [isMerging, setIsMerging] = useState(false);
   const [mergeOutputName, setMergeOutputName] = useState('');
   const [mergeError, setMergeError] = useState<string | null>(null);
@@ -547,7 +550,12 @@ export default function App() {
     });
   };
 
-  const reorderMergeFile = (sourceId: string | null, targetId: string) => {
+  const getDropInsertPosition = (event: React.DragEvent<HTMLElement>): DropInsertPosition => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+  };
+
+  const reorderMergeFile = (sourceId: string | null, targetId: string, position: DropInsertPosition = 'before') => {
     if (!sourceId || sourceId === targetId) return;
     setMergeFiles(current => {
       const sourceIndex = current.findIndex(item => item.id === sourceId);
@@ -556,7 +564,9 @@ export default function App() {
 
       const next = [...current];
       const [moved] = next.splice(sourceIndex, 1);
-      next.splice(targetIndex, 0, moved);
+      const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      const insertIndex = position === 'after' ? adjustedTargetIndex + 1 : adjustedTargetIndex;
+      next.splice(insertIndex, 0, moved);
       return next;
     });
   };
@@ -1171,6 +1181,7 @@ export default function App() {
                   const ext = extensionOfName(f.name);
                   const isAi = ext === 'ai';
                   const isPdf = ext === 'pdf';
+                  const isDropTarget = mergeDropTarget?.id === f.id && mergeSortingId !== f.id;
                   return (
                     <motion.li
                       key={f.id}
@@ -1185,18 +1196,40 @@ export default function App() {
                       onDragOver={event => {
                         event.preventDefault();
                         event.dataTransfer.dropEffect = 'move';
+                        if (mergeSortingId && mergeSortingId !== f.id) {
+                          setMergeDropTarget({ id: f.id, position: getDropInsertPosition(event) });
+                        }
+                      }}
+                      onDragLeave={event => {
+                        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                          setMergeDropTarget(current => current?.id === f.id ? null : current);
+                        }
                       }}
                       onDrop={event => {
                         event.preventDefault();
-                        reorderMergeFile(mergeSortingId || event.dataTransfer.getData('text/plain'), f.id);
+                        const position = mergeDropTarget?.id === f.id ? mergeDropTarget.position : getDropInsertPosition(event);
+                        reorderMergeFile(mergeSortingId || event.dataTransfer.getData('text/plain'), f.id, position);
                         setMergeSortingId(null);
+                        setMergeDropTarget(null);
                       }}
-                      onDragEnd={() => setMergeSortingId(null)}
+                      onDragEnd={() => {
+                        setMergeSortingId(null);
+                        setMergeDropTarget(null);
+                      }}
                       className={cn(
-                        'flex items-center px-4 py-3 gap-3 group transition-colors',
-                        mergeSortingId === f.id ? 'bg-slate-100/80 opacity-70' : 'hover:bg-slate-50/70'
+                        'relative flex items-center px-4 py-3 gap-3 group transition-all duration-150 ease-out',
+                        mergeSortingId === f.id ? 'scale-[0.985] bg-slate-100/80 opacity-60' : 'hover:bg-slate-50/70',
+                        isDropTarget ? 'bg-slate-50 shadow-inner' : ''
                       )}
                     >
+                      {isDropTarget && (
+                        <span
+                          className={cn(
+                            'pointer-events-none absolute left-3 right-3 z-20 h-1 rounded-full bg-slate-950 shadow-[0_0_0_3px_rgba(15,23,42,0.10)]',
+                            mergeDropTarget?.position === 'before' ? 'top-0 -translate-y-1/2' : 'bottom-0 translate-y-1/2'
+                          )}
+                        />
+                      )}
                       <span className="text-xs text-gray-300 w-5 text-right flex-shrink-0">{idx + 1}</span>
                       <span className={cn(
                         'text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0',
