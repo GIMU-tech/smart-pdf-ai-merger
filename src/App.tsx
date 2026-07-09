@@ -16,6 +16,7 @@ import {
   Home,
   ArrowRight,
   Files,
+  FileOutput,
   Printer,
   Search,
   FileImage,
@@ -48,9 +49,12 @@ type DownloadItem = {
   blob: Blob;
   note?: string;
   emphasis?: boolean;
+  editableName?: string;
+  pageNumber?: number;
+  totalPages?: number;
 };
 
-type AppTab = 'home' | 'merge' | 'outline' | 'compare' | 'illustrator' | 'images';
+type AppTab = 'home' | 'merge' | 'split' | 'outline' | 'compare' | 'illustrator' | 'images';
 
 type FeatureCard = {
   tab: Exclude<AppTab, 'home'>;
@@ -75,6 +79,17 @@ const featureCards: FeatureCard[] = [
     cta: '파일 합치기',
     accent: 'from-sky-500 to-cyan-400',
     icon: Files,
+  },
+  {
+    tab: 'split',
+    title: 'PDF 분리',
+    eyebrow: '문서 정리',
+    description: '여러 페이지 PDF를 페이지별 단일 PDF로 나누고 ZIP으로 내려받습니다.',
+    formats: 'PDF',
+    purpose: '대지별 파일 분리, 페이지별 납품',
+    cta: '페이지 나누기',
+    accent: 'from-blue-500 to-indigo-400',
+    icon: FileOutput,
   },
   {
     tab: 'outline',
@@ -126,6 +141,7 @@ const homeRailItems: Array<{ tab?: AppTab; label: string; icon: React.ComponentT
   { label: 'New', icon: Plus, muted: true },
   { tab: 'home', label: '홈', icon: Home },
   { tab: 'merge', label: '병합', icon: Files },
+  { tab: 'split', label: '분리', icon: FileOutput },
   { tab: 'outline', label: '출력', icon: Printer },
   { tab: 'compare', label: '비교', icon: Search },
   { tab: 'illustrator', label: '뷰어', icon: FileImage },
@@ -149,6 +165,7 @@ const workspaceGroups: Array<{
     label: '문서 준비',
     items: [
       { tab: 'merge', title: 'PDF 병합', desc: 'PDF, AI, 이미지 묶음', icon: Files, color: 'text-sky-500' },
+      { tab: 'split', title: 'PDF 분리', desc: '페이지별 PDF 저장', icon: FileOutput, color: 'text-blue-500' },
       { tab: 'outline', title: '인쇄용 변환', desc: '출력 전달 파일 생성', icon: Printer, color: 'text-amber-500' },
     ],
   },
@@ -212,6 +229,13 @@ function workspacePreviewText(item: WorkspaceItem) {
       meta: '샘플 파일 목록',
     };
   }
+  if (item.tab === 'split') {
+    return {
+      title: '페이지별 PDF 자동 분리',
+      desc: '여러 페이지 PDF를 읽어 각 페이지를 독립 PDF로 만들고 ZIP 패키지로 정리합니다.',
+      meta: '페이지별 결과',
+    };
+  }
   if (item.tab === 'outline') {
     return {
       title: '출력용 변환 파일 생성',
@@ -256,6 +280,7 @@ function workspacePreviewText(item: WorkspaceItem) {
 
 function workspacePreviewImagePath(item: WorkspaceItem) {
   if (item.tab === 'merge') return '/workspace-previews/merge.png';
+  if (item.tab === 'split') return '/workspace-previews/merge.png';
   if (item.tab === 'outline') return '/workspace-previews/outline.png';
   if (item.tab === 'compare') return '/workspace-previews/compare.png';
   if (item.tab === 'illustrator') return '/workspace-previews/viewer.png';
@@ -330,9 +355,61 @@ function WorkspaceHoverPreview({ item }: { item: WorkspaceItem }) {
 
 const MERGE_EXTENSIONS = ['pdf', 'ai', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
 const IMAGE_MERGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
+const DEFAULT_SPLIT_NAME_RULE = '{name}_page_{page0}';
 
 function extensionOfName(name: string) {
   return name.split('.').pop()?.toLowerCase() || '';
+}
+
+function baseNameOfFile(name: string) {
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+function safeOutputBaseName(name: string, fallback: string) {
+  const trimmed = name.trim();
+  return (trimmed || fallback).replace(/[\\/:*?"<>|]/g, '_');
+}
+
+function splitEditablePdfName(item: DownloadItem) {
+  return safeOutputBaseName(item.editableName ?? baseNameOfFile(item.fileName), baseNameOfFile(item.fileName));
+}
+
+function splitDownloadFileName(item: DownloadItem) {
+  return `${splitEditablePdfName(item)}.pdf`;
+}
+
+function uniqueFileName(fileName: string, used: Map<string, number>) {
+  const ext = extensionOfName(fileName);
+  const base = ext ? fileName.slice(0, -(ext.length + 1)) : fileName;
+  let candidate = fileName;
+  let suffix = 2;
+
+  while (used.has(candidate.toLowerCase())) {
+    candidate = ext ? `${base}_${suffix}.${ext}` : `${fileName}_${suffix}`;
+    suffix += 1;
+  }
+
+  used.set(candidate.toLowerCase(), 1);
+  return candidate;
+}
+
+function padPageNumber(pageNumber: number, totalPages: number) {
+  return String(pageNumber).padStart(Math.max(2, String(totalPages).length), '0');
+}
+
+function formatSplitRuleName(rule: string, baseName: string, pageNumber: number, totalPages: number) {
+  const safeBaseName = safeOutputBaseName(baseName, '분리_문서');
+  const page = String(pageNumber);
+  const page0 = padPageNumber(pageNumber, totalPages);
+  const total = String(totalPages);
+  const rendered = (rule.trim() || DEFAULT_SPLIT_NAME_RULE)
+    .replace(/\{name\}/g, safeBaseName)
+    .replace(/\{page0\}/g, page0)
+    .replace(/\{page\}/g, page)
+    .replace(/\{total\}/g, total);
+
+  return safeOutputBaseName(rendered, `${safeBaseName}_page_${page0}`);
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -403,6 +480,17 @@ export default function App() {
   const [mergeOutputName, setMergeOutputName] = useState('');
   const [mergeError, setMergeError] = useState<string | null>(null);
   const mergeInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Split tab state ──
+  const [splitFile, setSplitFile] = useState<File | null>(null);
+  const [splitDragging, setSplitDragging] = useState(false);
+  const [isSplitting, setIsSplitting] = useState(false);
+  const [splitOutputName, setSplitOutputName] = useState('');
+  const [splitError, setSplitError] = useState<string | null>(null);
+  const [splitSuccess, setSplitSuccess] = useState<string | null>(null);
+  const [splitDownloads, setSplitDownloads] = useState<DownloadItem[]>([]);
+  const [splitNameRule, setSplitNameRule] = useState(DEFAULT_SPLIT_NAME_RULE);
+  const splitInputRef = useRef<HTMLInputElement>(null);
 
   // ── Outline tab state ──
   const [outlineFile, setOutlineFile] = useState<File | null>(null);
@@ -492,6 +580,75 @@ export default function App() {
       setMergeError(err.message || '병합 중 오류가 발생했습니다.');
     } finally {
       setIsMerging(false);
+    }
+  };
+
+  // ── Split handlers ──
+  const setSplitTarget = (f: File) => {
+    const ext = extensionOfName(f.name);
+    if (ext !== 'pdf') {
+      setSplitError('PDF 파일만 분리할 수 있습니다.');
+      return;
+    }
+    setSplitFile(f);
+    setSplitOutputName(baseNameOfFile(f.name));
+    setSplitError(null);
+    setSplitSuccess(null);
+    setSplitDownloads([]);
+    setSplitNameRule(DEFAULT_SPLIT_NAME_RULE);
+  };
+
+  const handleSplitDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setSplitDragging(false);
+    if (e.dataTransfer.files.length > 0) setSplitTarget(e.dataTransfer.files[0]);
+  };
+
+  const runSplit = async () => {
+    if (!splitFile) {
+      setSplitError('분리할 PDF 파일을 선택해주세요.');
+      return;
+    }
+    setIsSplitting(true);
+    setSplitError(null);
+    setSplitSuccess(null);
+    setSplitDownloads([]);
+
+    try {
+      const sourceBytes = await splitFile.arrayBuffer();
+      const source = await PDFDocument.load(sourceBytes, { ignoreEncryption: true });
+      const pageCount = source.getPageCount();
+      if (pageCount < 1) throw new Error('PDF 페이지를 찾을 수 없습니다.');
+
+      const baseName = safeOutputBaseName(splitOutputName || baseNameOfFile(splitFile.name), '분리_문서');
+      const downloads: DownloadItem[] = [];
+
+      for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+        const singlePageDoc = await PDFDocument.create();
+        const [page] = await singlePageDoc.copyPages(source, [pageIndex]);
+        singlePageDoc.addPage(page);
+        const outBytes = await singlePageDoc.save({ useObjectStreams: true });
+        const pageNumber = pageIndex + 1;
+        const editableName = formatSplitRuleName(splitNameRule, baseName, pageNumber, pageCount);
+        downloads.push({
+          id: crypto.randomUUID(),
+          label: `${pageNumber}페이지`,
+          fileName: `${editableName}.pdf`,
+          blob: new Blob([outBytes], { type: 'application/pdf' }),
+          note: `원본 PDF의 ${pageNumber}페이지를 단일 PDF로 저장합니다.`,
+          emphasis: pageIndex === 0,
+          editableName,
+          pageNumber,
+          totalPages: pageCount,
+        });
+      }
+
+      setSplitDownloads(downloads);
+      setSplitSuccess(`${pageCount}개 페이지를 각각의 PDF로 분리했습니다.`);
+    } catch (err: any) {
+      setSplitError(err.message || 'PDF 분리 중 오류가 발생했습니다.');
+    } finally {
+      setIsSplitting(false);
     }
   };
 
@@ -633,6 +790,7 @@ export default function App() {
   const navItems: { tab: AppTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { tab: 'home', label: '홈', icon: Home },
     { tab: 'merge', label: '병합', icon: Files },
+    { tab: 'split', label: '분리', icon: FileOutput },
     { tab: 'outline', label: '출력', icon: Printer },
     { tab: 'compare', label: '비교', icon: Search },
     { tab: 'illustrator', label: '뷰어', icon: FileImage },
@@ -641,6 +799,33 @@ export default function App() {
 
   const downloadOutlineItem = (item: DownloadItem) => {
     downloadBlob(item.blob, item.fileName);
+  };
+
+  const downloadSplitItem = (item: DownloadItem) => {
+    downloadBlob(item.blob, splitDownloadFileName(item));
+  };
+
+  const updateSplitDownloadName = (id: string, value: string) => {
+    setSplitDownloads(items => items.map(item => (
+      item.id === id ? { ...item, editableName: value.replace(/[\\/:*?"<>|]/g, '_') } : item
+    )));
+  };
+
+  const applySplitNameRule = () => {
+    if (splitDownloads.length === 0) return;
+    const baseName = safeOutputBaseName(splitOutputName || (splitFile ? baseNameOfFile(splitFile.name) : ''), '분리_문서');
+    setSplitDownloads(items => items.map((item, index) => {
+      const totalPages = item.totalPages || items.length;
+      const pageNumber = item.pageNumber || index + 1;
+      const editableName = formatSplitRuleName(splitNameRule, baseName, pageNumber, totalPages);
+      return {
+        ...item,
+        editableName,
+        fileName: `${editableName}.pdf`,
+        pageNumber,
+        totalPages,
+      };
+    }));
   };
 
   const openWorkspaceItem = (item: WorkspaceItem) => {
@@ -661,6 +846,30 @@ export default function App() {
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     downloadBlob(zipBlob, `${outlineResultName || '인쇄용_변환_결과'}.zip`);
   };
+
+  const downloadSplitZip = async () => {
+    if (splitDownloads.length === 0) return;
+    const zip = new JSZip();
+    const usedNames = new Map<string, number>();
+    splitDownloads.forEach(item => {
+      zip.file(uniqueFileName(splitDownloadFileName(item), usedNames), item.blob);
+    });
+    zip.file(
+      'README.txt',
+      `PDF 페이지 분리 결과입니다.\n원본 파일: ${splitFile?.name || 'unknown.pdf'}\n분리 페이지 수: ${splitDownloads.length}\n`
+    );
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const baseName = safeOutputBaseName(splitOutputName || (splitFile ? baseNameOfFile(splitFile.name) : ''), '분리_문서');
+    downloadBlob(zipBlob, `${baseName}_pages.zip`);
+  };
+
+  const splitRuleBaseName = safeOutputBaseName(splitOutputName || (splitFile ? baseNameOfFile(splitFile.name) : ''), '분리_문서');
+  const splitRulePreview = `${formatSplitRuleName(
+    splitNameRule,
+    splitRuleBaseName,
+    splitDownloads[0]?.pageNumber || 1,
+    splitDownloads[0]?.totalPages || splitDownloads.length || 4
+  )}.pdf`;
 
   return (
     <div className="min-h-screen bg-[#fbfcfd] text-slate-950 flex flex-col bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.025)_1px,transparent_0)] [background-size:22px_22px]" style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}>
@@ -982,7 +1191,213 @@ export default function App() {
           </div>
         </div>
 
-        {/* ════ TAB 2: OUTLINE ════ */}
+        {/* ════ TAB 2: SPLIT ════ */}
+        <div style={{ display: activeTab === 'split' ? 'flex' : 'none' }} className="flex-col gap-5 w-full flex animate-fadeIn">
+          <div>
+            <h2 className="text-lg font-black tracking-tight text-slate-950">PDF 분리</h2>
+            <p className="mt-1 text-xs font-semibold text-slate-400">여러 페이지 PDF를 페이지별 단일 PDF로 나눕니다.</p>
+          </div>
+
+          {!splitFile && (
+            <div
+              onDragOver={e => { e.preventDefault(); setSplitDragging(true); }}
+              onDragLeave={() => setSplitDragging(false)}
+              onDrop={handleSplitDrop}
+              onClick={() => splitInputRef.current?.click()}
+              className={cn(
+                'border rounded-2xl bg-white/85 flex flex-col items-center justify-center gap-2 py-10 cursor-pointer transition-all select-none shadow-sm',
+                splitDragging
+                  ? 'border-slate-400 bg-slate-50'
+                  : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
+              )}
+            >
+              <Upload className="w-5 h-5 text-gray-300" />
+              <p className="text-sm text-gray-400">PDF 파일을 드래그하거나 클릭하여 선택</p>
+              <p className="text-xs text-gray-300">.pdf</p>
+              <input
+                ref={splitInputRef}
+                type="file"
+                accept=".pdf,application/pdf"
+                className="hidden"
+                onChange={e => { if (e.target.files?.[0]) setSplitTarget(e.target.files[0]); }}
+              />
+            </div>
+          )}
+
+          {splitFile && (
+            <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
+              className="border border-slate-200 rounded-2xl bg-white/90 p-4 flex items-center gap-3 animate-fadeIn shadow-sm">
+              <div className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 bg-blue-50 text-blue-500">
+                PDF
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-800 truncate">{splitFile.name}</p>
+                <p className="text-xs text-gray-400 font-mono">{formatSize(splitFile.size)}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setSplitFile(null);
+                  setSplitOutputName('');
+                  setSplitSuccess(null);
+                  setSplitError(null);
+                  setSplitDownloads([]);
+                  if (splitInputRef.current) splitInputRef.current.value = '';
+                }}
+                className="text-gray-300 hover:text-red-400 transition-colors"
+                title="파일 제거"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </motion.div>
+          )}
+
+          <AnimatePresence>
+            {splitError && (
+              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                className="flex items-center gap-2 text-sm text-red-500 bg-red-50 border border-red-100 px-4 py-2.5 rounded-lg">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span className="flex-1">{splitError}</span>
+                <button onClick={() => setSplitError(null)}><X className="w-4 h-4" /></button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {splitFile && (
+            <div className="flex gap-2 items-center">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={splitOutputName}
+                  onChange={e => setSplitOutputName(e.target.value)}
+                  placeholder="분리 파일 기본 이름"
+                  className="w-full text-sm px-4 py-2.5 border border-slate-200 bg-white/90 rounded-xl focus:outline-none focus:border-slate-400 transition-colors pr-32 placeholder:text-slate-300 shadow-sm"
+                />
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-300 font-mono">_page_01.pdf</span>
+              </div>
+              <button
+                onClick={runSplit}
+                disabled={isSplitting}
+                className={cn(
+                  'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex-shrink-0',
+                  isSplitting
+                    ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                    : 'bg-slate-950 text-white hover:bg-slate-800 active:scale-[0.98]'
+                )}
+              >
+                {isSplitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileOutput className="w-4 h-4" />}
+                {isSplitting ? '분리 중…' : '분리 실행'}
+              </button>
+            </div>
+          )}
+
+          <AnimatePresence>
+            {splitSuccess && (
+              <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
+                className="border border-slate-200 rounded-2xl overflow-hidden bg-white/90 shadow-sm">
+                <div className="bg-slate-50/70 px-5 py-4 flex flex-wrap items-center gap-3 border-b border-slate-100">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-semibold text-gray-800">분리 완료</span>
+                    <p className="mt-1 text-xs text-gray-400">{splitSuccess}</p>
+                  </div>
+                  <button
+                    onClick={() => void downloadSplitZip()}
+                    className="flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    전체 ZIP 다운로드
+                  </button>
+                </div>
+                <div className="border-b border-slate-100 bg-white px-5 py-4">
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="min-w-[260px] flex-1">
+                      <label className="text-[11px] font-black text-slate-500">파일명 일괄 규칙</label>
+                      <div className="mt-2 flex items-center rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 focus-within:border-slate-400 focus-within:bg-white">
+                        <input
+                          value={splitNameRule}
+                          onChange={e => setSplitNameRule(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') applySplitNameRule();
+                          }}
+                          className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-900 outline-none"
+                          placeholder={DEFAULT_SPLIT_NAME_RULE}
+                        />
+                        <span className="ml-2 flex-shrink-0 text-xs font-semibold text-slate-300">.pdf</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={applySplitNameRule}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-50"
+                    >
+                      전체 적용
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-400">
+                    <span>예: <span className="font-mono text-slate-600">{splitRulePreview}</span></span>
+                    <span className="font-mono">{'{name}'}</span>
+                    <span className="font-mono">{'{page}'}</span>
+                    <span className="font-mono">{'{page0}'}</span>
+                    <span className="font-mono">{'{total}'}</span>
+                  </div>
+                </div>
+                <div className="max-h-[320px] overflow-y-auto px-5 py-4 space-y-3">
+                  {splitDownloads.map(item => (
+                    <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-100 bg-white px-3 py-3">
+                      <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center rounded-lg border border-transparent bg-slate-50/70 px-2 py-1.5 transition focus-within:border-slate-200 focus-within:bg-white focus-within:shadow-sm">
+                          <input
+                            aria-label={`${item.label} 파일명`}
+                            value={item.editableName ?? baseNameOfFile(item.fileName)}
+                            onChange={e => updateSplitDownloadName(item.id, e.target.value)}
+                            onBlur={() => updateSplitDownloadName(item.id, splitEditablePdfName(item))}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') e.currentTarget.blur();
+                              if (e.key === 'Escape') {
+                                updateSplitDownloadName(item.id, baseNameOfFile(item.fileName));
+                                e.currentTarget.blur();
+                              }
+                            }}
+                            className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-gray-900 outline-none"
+                          />
+                          <span className="ml-1 flex-shrink-0 text-xs font-semibold text-gray-300">.pdf</span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-gray-400">{item.note}</p>
+                      </div>
+                      <span className="rounded bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-500">{item.label}</span>
+                      <button
+                        onClick={() => downloadSplitItem(item)}
+                        className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 transition hover:bg-gray-50"
+                      >
+                        다운로드
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="px-5 py-3 border-t border-gray-50 flex justify-end">
+                  <button
+                    onClick={() => { setSplitSuccess(null); setSplitDownloads([]); }}
+                    className="text-xs text-gray-400 hover:text-gray-700 transition-colors font-medium"
+                  >
+                    닫기
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {!splitSuccess && (
+            <div className="text-xs text-gray-400 leading-relaxed border-l-2 border-gray-100 pl-4">
+              <strong className="text-gray-500 font-medium">생성되는 파일</strong>
+              <div className="mt-1.5 space-y-0.5 font-mono">
+                <div>[이름]_page_01.pdf · [이름]_page_02.pdf · ...</div>
+                <div>전체 결과는 ZIP 파일로 한 번에 내려받을 수 있습니다.</div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ════ TAB 3: OUTLINE ════ */}
         <div style={{ display: activeTab === 'outline' ? 'flex' : 'none' }} className="flex-col gap-5 w-full flex animate-fadeIn">
           <div>
             <h2 className="text-lg font-black tracking-tight text-slate-950">인쇄용 변환</h2>

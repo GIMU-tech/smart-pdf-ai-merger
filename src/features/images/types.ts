@@ -34,7 +34,7 @@ export type StitchOptions = {
 
 export type SplitAxis = 'vertical' | 'horizontal';
 
-export type SplitStrategy = 'flow' | 'fixed' | 'manual';
+export type SplitStrategy = 'flow' | 'ai-flow' | 'fixed' | 'manual';
 
 export type SplitOptions = {
   axis: SplitAxis;

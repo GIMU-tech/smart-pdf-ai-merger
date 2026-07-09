@@ -354,7 +354,15 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
     activeMode === 'stitch'
       ? `여러 이미지를 지정 ${stitchDirection === 'vertical' ? '폭' : '높이'}으로 맞춘 뒤 ${stitchDirection === 'vertical' ? '위에서 아래로' : '왼쪽에서 오른쪽으로'} 합칩니다.`
       : activeMode === 'split'
-        ? `긴 이미지를 ${splitAxis === 'vertical' ? '위에서 아래로' : '왼쪽에서 오른쪽으로'} ${splitStrategy === 'flow' ? '흐름 기준' : '지정 픽셀 기준'}으로 나눕니다.`
+        ? `긴 이미지를 ${splitAxis === 'vertical' ? '위에서 아래로' : '왼쪽에서 오른쪽으로'} ${
+            splitStrategy === 'ai-flow'
+              ? 'AI 흐름 기준'
+              : splitStrategy === 'flow'
+                ? '흐름 기준'
+                : splitStrategy === 'manual'
+                  ? '수동 절단선 기준'
+                  : '지정 픽셀 기준'
+          }으로 나눕니다.`
         : activeModeCopy.description;
   const selectedOutputs = outputFiles.filter(file => file.selected);
   const parsedManualCuts = useMemo(() => parseManualCutValues(splitManualCuts), [splitManualCuts]);
@@ -875,6 +883,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                         resetOutputs();
                       }}
                     >
+                      <option value="ai-flow">AI 흐름 기준</option>
                       <option value="flow">흐름 기준</option>
                       <option value="fixed">고정 픽셀</option>
                       <option value="manual">수동 절단선</option>
@@ -948,9 +957,9 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                           }}
                         />
                       </label>
-                      {splitStrategy === 'flow' && (
+                      {(splitStrategy === 'flow' || splitStrategy === 'ai-flow') && (
                         <label className="grid gap-1 text-xs font-semibold text-gray-500">
-                          흐름 탐색 범위(px)
+                          {splitStrategy === 'ai-flow' ? 'AI 탐색 범위(px)' : '흐름 탐색 범위(px)'}
                           <input
                             className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
                             type="number"
@@ -962,6 +971,11 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                             }}
                           />
                         </label>
+                      )}
+                      {splitStrategy === 'ai-flow' && (
+                        <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] font-medium leading-4 text-blue-700">
+                          Gemini가 섹션 흐름을 먼저 판단하고, 실패하면 기존 흐름 기준으로 처리합니다.
+                        </div>
                       )}
                     </div>
                   )}
