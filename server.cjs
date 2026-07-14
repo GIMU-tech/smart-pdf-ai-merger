@@ -5,6 +5,7 @@ const { Worker } = require('worker_threads');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const { execFile } = require('child_process');
 const JSZip = require('jszip');
 const sharp = require('sharp');
@@ -143,6 +144,159 @@ function runImageWorker(workerData) {
       }
     });
   });
+}
+
+const GIF_EXPORT_LIMITS = Object.freeze({
+  maxFrames: 60,
+  maxFrameBytes: 8 * 1024 * 1024,
+  maxUploadBytes: 80 * 1024 * 1024,
+  maxDurationMs: 8000,
+  outputWidth: 860,
+});
+
+function removeGifTempDir(req) {
+  if (!req.gifTempDir) return;
+  try {
+    fs.rmSync(req.gifTempDir, { recursive: true, force: true });
+  } catch (_) {}
+  req.gifTempDir = null;
+}
+
+const gifUpload = multer({
+  storage: multer.diskStorage({
+    destination(req, _file, callback) {
+      try {
+        if (!req.gifTempDir) {
+          req.gifTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gif-export-'));
+        }
+        callback(null, req.gifTempDir);
+      } catch (error) {
+        callback(error);
+      }
+    },
+    filename(_req, _file, callback) {
+      callback(null, `frame-${crypto.randomUUID()}.png`);
+    },
+  }),
+  limits: {
+    fileSize: GIF_EXPORT_LIMITS.maxFrameBytes,
+    files: GIF_EXPORT_LIMITS.maxFrames,
+    fields: 2,
+    fieldSize: 64 * 1024,
+  },
+  fileFilter(_req, file, callback) {
+    callback(null, file.mimetype === 'image/png');
+  },
+}).array('frames', GIF_EXPORT_LIMITS.maxFrames);
+
+function gifUploadMiddleware(req, res, next) {
+  const contentLength = Number(req.headers['content-length'] || 0);
+  if (Number.isFinite(contentLength) && contentLength > GIF_EXPORT_LIMITS.maxUploadBytes + (512 * 1024)) {
+    return res.status(413).json({ success: false, error: 'GIF 프레임 전체 업로드는 80MB 이하여야 합니다.' });
+  }
+
+  gifUpload(req, res, (error) => {
+    if (!error) return next();
+    removeGifTempDir(req);
+    const isLimitError = error instanceof multer.MulterError;
+    return res.status(isLimitError ? 413 : 400).json({
+      success: false,
+      error: isLimitError
+        ? 'GIF 프레임 업로드 제한을 초과했습니다.'
+        : 'PNG 프레임 업로드를 처리할 수 없습니다.',
+    });
+  });
+}
+
+function runGifWorker(workerData) {
+  return new Promise((resolve, reject) => {
+    const workerPath = path.join(__dirname, 'workers', 'gif.worker.cjs');
+    const worker = new Worker(workerPath, { workerData });
+    let settled = false;
+
+    worker.on('message', (message) => {
+      if (settled) return;
+      settled = true;
+      if (message && message.success) resolve(message.outputPath);
+      else reject(new Error(message?.error || 'GIF 인코딩에 실패했습니다.'));
+    });
+
+    worker.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+
+    worker.on('exit', (code) => {
+      if (code !== 0 && !settled) {
+        settled = true;
+        reject(new Error(`GIF 워커가 비정상적으로 종료되었습니다 (code: ${code}).`));
+      }
+    });
+  });
+}
+
+function parseGifExportOptions(value, frameCount) {
+  let options;
+  try {
+    options = JSON.parse(value || '{}');
+  } catch (_) {
+    throw Object.assign(new Error('GIF 내보내기 옵션을 읽을 수 없습니다.'), { statusCode: 400 });
+  }
+
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw Object.assign(new Error('GIF 내보내기 옵션 형식이 올바르지 않습니다.'), { statusCode: 400 });
+  }
+
+  const { durationMs, fps, delays, loopCount = 0 } = options;
+  const validDuration = Number.isInteger(durationMs) && durationMs >= 100 && durationMs <= GIF_EXPORT_LIMITS.maxDurationMs;
+  const validFps = Number.isInteger(fps) && fps >= 1 && fps <= 60;
+  const validDelays = Array.isArray(delays)
+    && delays.length === frameCount
+    && delays.every(delay => Number.isInteger(delay) && delay > 0 && delay <= GIF_EXPORT_LIMITS.maxDurationMs)
+    && delays.reduce((sum, delay) => sum + delay, 0) === durationMs;
+  const validLoop = Number.isInteger(loopCount) && loopCount >= 0 && loopCount <= 65535;
+
+  if (!validDuration || !validFps || !validDelays || !validLoop) {
+    throw Object.assign(new Error('GIF 길이, FPS, delay 또는 반복 옵션이 유효하지 않습니다.'), { statusCode: 400 });
+  }
+
+  return { delays, loopCount };
+}
+
+async function validateGifPngFrames(files) {
+  let expectedWidth = null;
+  let expectedHeight = null;
+
+  for (const file of files) {
+    const signature = Buffer.alloc(8);
+    const handle = await fs.promises.open(file.path, 'r');
+    try {
+      await handle.read(signature, 0, signature.length, 0);
+    } finally {
+      await handle.close();
+    }
+
+    if (!signature.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+      throw Object.assign(new Error('PNG가 아닌 프레임이 포함되어 있습니다.'), { statusCode: 400 });
+    }
+
+    let metadata;
+    try {
+      metadata = await sharp(file.path, { animated: false, limitInputPixels: 100_000_000 }).metadata();
+    } catch (_) {
+      throw Object.assign(new Error('손상되었거나 너무 큰 PNG 프레임이 포함되어 있습니다.'), { statusCode: 400 });
+    }
+    if (metadata.format !== 'png' || !metadata.width || !metadata.height) {
+      throw Object.assign(new Error('PNG 프레임 크기를 확인할 수 없습니다.'), { statusCode: 400 });
+    }
+    if (expectedWidth === null) {
+      expectedWidth = metadata.width;
+      expectedHeight = metadata.height;
+    } else if (metadata.width !== expectedWidth || metadata.height !== expectedHeight) {
+      throw Object.assign(new Error('모든 PNG 프레임의 크기는 같아야 합니다.'), { statusCode: 400 });
+    }
+  }
 }
 
 function sanitizeUploadName(name, fallback) {
@@ -586,6 +740,56 @@ async function applyGeminiSplitOptions(inputPaths, options) {
   };
 }
 
+// Route 1.4: Encode browser-rendered PNG frames as an animated GIF
+app.post('/gif-export', gifUploadMiddleware, async (req, res) => {
+  const files = Array.isArray(req.files) ? req.files : [];
+
+  try {
+    if (files.length < 2 || files.length > GIF_EXPORT_LIMITS.maxFrames) {
+      return res.status(400).json({ success: false, error: 'GIF에는 2~60개의 PNG 프레임이 필요합니다.' });
+    }
+
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    if (totalBytes > GIF_EXPORT_LIMITS.maxUploadBytes) {
+      return res.status(413).json({ success: false, error: 'GIF 프레임 전체 업로드는 80MB 이하여야 합니다.' });
+    }
+
+    const options = parseGifExportOptions(req.body.options, files.length);
+    await validateGifPngFrames(files);
+
+    const outputPath = path.join(req.gifTempDir, 'motion.gif');
+    await runGifWorker({
+      framePaths: files.map(file => file.path),
+      outputPath,
+      delays: options.delays,
+      width: GIF_EXPORT_LIMITS.outputWidth,
+      loop: options.loopCount,
+      colors: 256,
+      dither: 0.75,
+      effort: 7,
+    });
+
+    res.set({
+      'Content-Type': 'image/gif',
+      'Content-Disposition': 'attachment; filename="motion.gif"',
+      'Cache-Control': 'no-store',
+    });
+    await new Promise((resolve, reject) => {
+      res.sendFile(outputPath, error => (error ? reject(error) : resolve()));
+    });
+  } catch (error) {
+    console.error('[API Server] GIF export failed:', error);
+    if (!res.headersSent) {
+      res.status(error.statusCode || 500).json({
+        success: false,
+        error: error.statusCode ? error.message : 'GIF를 인코딩하지 못했습니다.',
+      });
+    }
+  } finally {
+    removeGifTempDir(req);
+  }
+});
+
 // Route 1.5: Image toolkit operations for web browser uploads
 app.post('/image-process', imageUploadMiddleware, async (req, res) => {
   const uploadedFiles = collectUploadedImageFiles(req);
@@ -783,7 +987,29 @@ app.post('/process-outline', localUpload.single('file'), (req, res) => {
 });
 
 // Route 2.25: Preview Illustrator/PDF/SVG/EPS files
-app.post('/preview-illustrator', localUpload.single('file'), (req, res) => {
+const ILLUSTRATOR_PREVIEW_MAX_BYTES = 100 * 1024 * 1024;
+const illustratorPreviewUpload = multer({
+  dest: tempDir,
+  limits: { files: 1, fileSize: ILLUSTRATOR_PREVIEW_MAX_BYTES },
+}).single('file');
+
+function illustratorPreviewUploadMiddleware(req, res, next) {
+  illustratorPreviewUpload(req, res, (error) => {
+    if (!error) return next();
+    if (req.file?.path) {
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+    }
+    const isLimitError = error instanceof multer.MulterError;
+    return res.status(isLimitError ? 413 : 400).json({
+      success: false,
+      error: isLimitError
+        ? 'AI/EPS 파일은 100MB 이하만 업로드할 수 있습니다.'
+        : 'AI/EPS 업로드를 처리할 수 없습니다.',
+    });
+  });
+}
+
+app.post('/preview-illustrator', illustratorPreviewUploadMiddleware, (req, res) => {
   if (!req.file) {
     return res.status(400).json({ success: false, error: '업로드된 파일이 없습니다.' });
   }
@@ -835,13 +1061,21 @@ app.post('/preview-illustrator', localUpload.single('file'), (req, res) => {
     if (err) {
       console.error('[API Server] Illustrator preview failed:', err, stderr);
       try { fs.unlinkSync(outputPath); } catch (_) {}
+      const ghostscriptUnavailable = err.code === 'ENOENT';
       return res.status(500).json({
         success: false,
-        error: 'PDF 호환 저장된 AI 파일이 아니거나 EPS 변환에 실패했습니다.'
+        error: ghostscriptUnavailable
+          ? '변환 엔진(Ghostscript)을 찾을 수 없습니다. 서버에 Ghostscript를 설치하거나 내장 실행 파일을 확인해 주세요.'
+          : 'PDF 호환 저장된 AI 파일이 아니거나 EPS 변환에 실패했습니다.'
       });
     }
 
     try {
+      const outputStats = fs.statSync(outputPath);
+      if (outputStats.size <= 0 || outputStats.size > ILLUSTRATOR_PREVIEW_MAX_BYTES) {
+        try { fs.unlinkSync(outputPath); } catch (_) {}
+        return res.status(413).json({ success: false, error: '변환된 AI/EPS PDF는 100MB 이하여야 합니다.' });
+      }
       const fileData = fs.readFileSync(outputPath).toString('base64');
       try { fs.unlinkSync(outputPath); } catch (_) {}
       return res.json({

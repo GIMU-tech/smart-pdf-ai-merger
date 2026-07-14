@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { Worker } = require('worker_threads');
+const { createGifExportHandler } = require('./lib/electronGifExport.cjs');
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -45,6 +46,11 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
+ipcMain.handle('gif-export', createGifExportHandler({
+  showSaveDialog: options => dialog.showSaveDialog(options),
+  workerPath: path.join(__dirname, 'workers', 'gif.worker.cjs'),
+}));
 
 // IPC Handler: Select directory for saving output files
 ipcMain.handle('select-directory', async (event, options = {}) => {

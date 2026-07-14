@@ -20,6 +20,7 @@ import {
   Printer,
   Search,
   FileImage,
+  Film,
   Images,
   Ruler,
   Layers3,
@@ -36,6 +37,7 @@ import { CompareTab } from './features/compare/CompareTab';
 import { IllustratorViewerTab } from './features/illustrator/IllustratorViewerTab';
 import { ImageToolkitTab } from './features/images/ImageToolkitTab';
 import type { ImageToolMode } from './features/images/types';
+import { GifStudioTab } from './features/gif-studio/GifStudioTab';
 
 interface FileItem {
   id: string;
@@ -58,7 +60,7 @@ type DownloadItem = {
   totalPages?: number;
 };
 
-type AppTab = 'home' | 'merge' | 'split' | 'outline' | 'compare' | 'illustrator' | 'images';
+type AppTab = 'home' | 'merge' | 'split' | 'outline' | 'compare' | 'illustrator' | 'images' | 'gif';
 
 type FeatureCard = {
   tab: Exclude<AppTab, 'home'>;
@@ -141,7 +143,7 @@ const featureCards: FeatureCard[] = [
   },
 ];
 
-const homeRailItems: Array<{ tab?: AppTab; label: string; icon: React.ComponentType<{ className?: string }>; muted?: boolean }> = [
+const homeRailItems: Array<{ tab?: AppTab; label: string; icon: React.ComponentType<{ className?: string }>; muted?: boolean; beta?: boolean }> = [
   { label: 'New', icon: Plus, muted: true },
   { tab: 'home', label: '홈', icon: Home },
   { tab: 'merge', label: '병합', icon: Files },
@@ -150,6 +152,7 @@ const homeRailItems: Array<{ tab?: AppTab; label: string; icon: React.ComponentT
   { tab: 'compare', label: '비교', icon: Search },
   { tab: 'illustrator', label: '뷰어', icon: FileImage },
   { tab: 'images', label: '이미지', icon: Images },
+  { tab: 'gif', label: 'GIF', icon: Film, beta: true },
 ];
 
 type WorkspaceItem = {
@@ -159,6 +162,7 @@ type WorkspaceItem = {
   icon: React.ComponentType<{ className?: string }>;
   color: string;
   imageMode?: ImageToolMode;
+  beta?: boolean;
 };
 
 const workspaceGroups: Array<{
@@ -188,6 +192,7 @@ const workspaceGroups: Array<{
   {
     label: '이미지 제작',
     items: [
+      { tab: 'gif', title: 'GIF 생성', desc: '모션 편집기 준비 중', icon: Film, color: 'text-pink-500', beta: true },
       { tab: 'images', imageMode: 'resize', title: '크기 변경', desc: '지정 폭 일괄 변환', icon: Ruler, color: 'text-violet-500' },
       { tab: 'images', imageMode: 'stitch', title: '이어붙이기', desc: '이미지 세로 합치기', icon: Layers3, color: 'text-fuchsia-500' },
       { tab: 'images', imageMode: 'split', title: '자르기', desc: '긴 이미지 분할', icon: Scissors, color: 'text-orange-500' },
@@ -826,7 +831,7 @@ export default function App() {
     }
   };
 
-  const navItems: { tab: AppTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  const navItems: { tab: AppTab; label: string; icon: React.ComponentType<{ className?: string }>; beta?: boolean }[] = [
     { tab: 'home', label: '홈', icon: Home },
     { tab: 'merge', label: '병합', icon: Files },
     { tab: 'split', label: '분리', icon: FileOutput },
@@ -834,6 +839,7 @@ export default function App() {
     { tab: 'compare', label: '비교', icon: Search },
     { tab: 'illustrator', label: '뷰어', icon: FileImage },
     { tab: 'images', label: '이미지', icon: Images },
+    { tab: 'gif', label: 'GIF 생성', icon: Film, beta: true },
   ];
 
   const downloadOutlineItem = (item: DownloadItem) => {
@@ -921,10 +927,12 @@ export default function App() {
           <FilePlus2 className="h-4 w-4" />
         </button>
         <nav className="flex min-w-0 items-center justify-end gap-2 overflow-x-auto">
-          {navItems.map(({ tab, label, icon: NavIcon }) => (
+          {navItems.map(({ tab, label, icon: NavIcon, beta }) => (
             <button
               key={tab}
+              type="button"
               onClick={() => setActiveTab(tab)}
+              aria-label={`${label}${beta ? ' 베타' : ''}`}
               className={cn(
                 'group flex h-9 flex-shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 text-xs font-bold leading-none transition',
                 activeTab === tab
@@ -935,6 +943,11 @@ export default function App() {
             >
               <NavIcon className="h-3.5 w-3.5" />
               <span>{label}</span>
+              {beta && (
+                <span className="rounded-md bg-pink-100 px-1.5 py-0.5 text-[9px] font-black tracking-wide text-pink-700">
+                  BETA
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -976,7 +989,9 @@ export default function App() {
                 return (
                   <button
                     key={item.label}
+                    type="button"
                     onClick={() => item.tab && setActiveTab(item.tab)}
+                    aria-label={`${item.label}${item.beta ? ' 베타' : ''}`}
                     className={cn(
                       'group flex w-full flex-col items-center gap-1 rounded-2xl px-1.5 py-2 text-[10px] font-bold transition',
                       active ? 'bg-slate-100 text-slate-950' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900',
@@ -985,7 +1000,14 @@ export default function App() {
                     title={item.label}
                   >
                     <Icon className="h-4 w-4" />
-                    <span className="leading-none">{item.label}</span>
+                    <span className="flex items-center gap-0.5 leading-none">
+                      <span>{item.label}</span>
+                      {item.beta && (
+                        <span className="rounded bg-pink-100 px-1 py-0.5 text-[7px] font-black tracking-wide text-pink-700">
+                          BETA
+                        </span>
+                      )}
+                    </span>
                   </button>
                 );
               })}
@@ -1036,7 +1058,9 @@ export default function App() {
                           return (
                             <button
                               key={itemKey}
+                              type="button"
                               onClick={() => openWorkspaceItem(item)}
+                              aria-label={`${item.title}${item.beta ? ' 베타' : ''} 작업 열기`}
                               onMouseEnter={() => setHoveredWorkspaceKey(itemKey)}
                               onMouseLeave={() => setHoveredWorkspaceKey(current => current === itemKey ? null : current)}
                               onFocus={() => setHoveredWorkspaceKey(itemKey)}
@@ -1047,7 +1071,14 @@ export default function App() {
                               <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200/90 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.08)] transition group-hover:-translate-y-0.5 group-hover:border-slate-300 group-hover:shadow-[0_14px_34px_rgba(15,23,42,0.12)]">
                                 <Icon className={cn('h-5 w-5', item.color)} />
                               </span>
-                              <span className="text-xs font-black text-slate-950">{item.title}</span>
+                              <span className="flex items-center justify-center gap-1 text-xs font-black text-slate-950">
+                                <span>{item.title}</span>
+                                {item.beta && (
+                                  <span className="rounded-md bg-pink-100 px-1.5 py-0.5 text-[8px] font-black tracking-wide text-pink-700">
+                                    BETA
+                                  </span>
+                                )}
+                              </span>
                             </button>
                           );
                         })}
@@ -1694,6 +1725,13 @@ export default function App() {
           className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
         >
           <ImageToolkitTab initialMode={imageInitialMode} />
+        </div>
+
+        <div
+          style={{ display: activeTab === 'gif' ? 'flex' : 'none' }}
+          className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
+        >
+          <GifStudioTab />
         </div>
 
         <div 

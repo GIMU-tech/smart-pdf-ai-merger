@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   processOutline: (args) => ipcRenderer.invoke('process-outline', args),
   comparePdfs: (args) => ipcRenderer.invoke('compare-pdfs', args),
   imageProcess: (args) => ipcRenderer.invoke('image-process', args),
+  gifExport: (payload) => ipcRenderer.invoke('gif-export', payload),
   getPathForFile: (file) => webUtils.getPathForFile(file),
 });
