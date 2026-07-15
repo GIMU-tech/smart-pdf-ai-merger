@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1040" role="img" aria-labelledby="title desc">
+  <title id="title">GANI FLOW logo preview board</title>
+  <desc id="desc">Primary logo, Layer G symbol sizes, dark-background use, and brand colors.</desc>
+  <defs>
+    <filter id="card-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#0F172A" flood-opacity="0.08"/>
+    </filter>
+    <mask id="preview-g-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#000"/>
+      <rect x="112" y="96" width="320" height="320" rx="88" fill="#fff"/>
+      <rect x="184" y="168" width="176" height="176" rx="52" fill="#000"/>
+      <rect x="326" y="176" width="118" height="104" fill="#000"/>
+      <rect x="280" y="256" width="152" height="64" rx="20" fill="#fff"/>
+    </mask>
+    <symbol id="preview-layer-g" viewBox="0 0 512 512">
+      <rect x="48" y="48" width="320" height="320" rx="88" fill="#C4B5FD"/>
+      <rect x="80" y="72" width="320" height="320" rx="88" fill="#8B5CF6"/>
+      <rect width="512" height="512" fill="#5B21B6" mask="url(#preview-g-cut)"/>
+    </symbol>
+    <symbol id="preview-layer-g-reversed" viewBox="0 0 512 512">
+      <rect x="48" y="48" width="320" height="320" rx="88" fill="#C4B5FD"/>
+      <rect x="80" y="72" width="320" height="320" rx="88" fill="#8B5CF6"/>
+      <rect width="512" height="512" fill="#6D28D9" mask="url(#preview-g-cut)"/>
+    </symbol>
+  </defs>
+  <rect width="1440" height="1040" fill="#F8FAFC"/>
+  <g font-family="Inter, Pretendard, Arial, sans-serif">
+    <text x="96" y="92" font-size="22" font-weight="700" letter-spacing="4" fill="#7C3AED">BRAND CONCEPT 01</text>
+    <text x="96" y="146" font-size="38" font-weight="800" fill="#0F172A">GANI FLOW · LAYER G</text>
+    <text x="96" y="184" font-size="20" font-weight="500" fill="#64748B">겹쳐진 디자인 파일과 작업 흐름을 하나의 G로 표현한 심볼</text>
+
+    <g filter="url(#card-shadow)">
+      <rect x="80" y="232" width="1280" height="296" rx="36" fill="#FFFFFF"/>
+    </g>
+    <use href="#preview-layer-g" x="132" y="270" width="220" height="220"/>
+    <text x="400" y="384" font-size="82" font-weight="800" letter-spacing="1.5" fill="#0F172A">GANI</text>
+    <text x="640" y="384" font-size="82" font-weight="650" letter-spacing="6" fill="#7C3AED">FLOW</text>
+    <text x="406" y="432" font-size="20" font-weight="650" letter-spacing="6" fill="#64748B">DESIGN FILE WORKSPACE</text>
+
+    <g filter="url(#card-shadow)">
+      <rect x="80" y="568" width="610" height="370" rx="36" fill="#FFFFFF"/>
+    </g>
+    <text x="124" y="626" font-size="18" font-weight="750" letter-spacing="2" fill="#0F172A">SYMBOL SCALE</text>
+    <use href="#preview-layer-g" x="120" y="674" width="176" height="176"/>
+    <use href="#preview-layer-g" x="346" y="718" width="96" height="96"/>
+    <use href="#preview-layer-g" x="492" y="734" width="64" height="64"/>
+    <use href="#preview-layer-g" x="606" y="750" width="32" height="32"/>
+    <text x="166" y="882" font-size="16" font-weight="600" fill="#64748B">176</text>
+    <text x="376" y="882" font-size="16" font-weight="600" fill="#64748B">96</text>
+    <text x="514" y="882" font-size="16" font-weight="600" fill="#64748B">64</text>
+    <text x="610" y="882" font-size="16" font-weight="600" fill="#64748B">32</text>
+
+    <g filter="url(#card-shadow)">
+      <rect x="730" y="568" width="630" height="370" rx="36" fill="#0F172A"/>
+    </g>
+    <text x="774" y="626" font-size="18" font-weight="750" letter-spacing="2" fill="#C4B5FD">DARK MODE</text>
+    <use href="#preview-layer-g-reversed" x="782" y="666" width="176" height="176"/>
+    <text x="990" y="754" font-size="48" font-weight="800" letter-spacing="1" fill="#FFFFFF">GANI</text>
+    <text x="1140" y="754" font-size="48" font-weight="650" letter-spacing="4" fill="#A78BFA">FLOW</text>
+    <text x="994" y="790" font-size="14" font-weight="650" letter-spacing="4" fill="#94A3B8">DESIGN FILE WORKSPACE</text>
+
+    <text x="80" y="1000" font-size="15" font-weight="600" fill="#64748B">COLOR</text>
+    <circle cx="160" cy="994" r="14" fill="#5B21B6"/>
+    <text x="184" y="1000" font-size="15" font-weight="600" fill="#334155">DEEP VIOLET · #5B21B6</text>
+    <circle cx="396" cy="994" r="14" fill="#8B5CF6"/>
+    <text x="420" y="1000" font-size="15" font-weight="600" fill="#334155">FLOW VIOLET · #8B5CF6</text>
+    <circle cx="660" cy="994" r="14" fill="#C4B5FD"/>
+    <text x="684" y="1000" font-size="15" font-weight="600" fill="#334155">LAYER LILAC · #C4B5FD</text>
+  </g>
+</svg>

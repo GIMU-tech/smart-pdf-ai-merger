@@ -106,7 +106,7 @@ function RasterCanvasStage({
   return (
     <canvas
       ref={canvasRef}
-      className="h-auto max-w-full cursor-crosshair touch-none rounded-sm bg-white shadow-[0_18px_50px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-4"
+      className="h-auto max-w-full cursor-crosshair touch-none rounded-sm bg-white shadow-[0_18px_50px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-4"
       style={{ maxHeight: 'min(48vh, 540px)' }}
       tabIndex={0}
       aria-label={`${source.name} 편집 캔버스. 마우스나 터치로 드래그하여 사각 영역을 선택합니다.`}
@@ -188,7 +188,7 @@ function SvgCanvasStage({ source, selection, onSelectionChange, onSelectionGestu
   return (
     <div
       ref={containerRef}
-      className="relative w-full max-w-full touch-none cursor-crosshair overflow-hidden rounded-sm bg-white shadow-[0_18px_50px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-4"
+      className="relative w-full max-w-full touch-none cursor-crosshair overflow-hidden rounded-sm bg-white shadow-[0_18px_50px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-4"
       style={{ aspectRatio: `${source.width} / ${source.height}`, maxWidth: `${source.width}px`, maxHeight: 'min(48vh, 540px)' }}
       tabIndex={0}
       role="application"
@@ -367,7 +367,7 @@ function HtmlCanvasStage({ source, selection, onSelectionChange, onSelectionGest
 
   return (
     <div
-      className="max-h-[min(48vh,540px)] max-w-full overflow-auto rounded-sm bg-white shadow-[0_18px_50px_rgba(15,23,42,0.18)] focus-within:ring-2 focus-within:ring-pink-500 focus-within:ring-offset-4"
+      className="max-h-[min(48vh,540px)] max-w-full overflow-auto rounded-sm bg-white shadow-[0_18px_50px_rgba(15,23,42,0.18)] focus-within:ring-2 focus-within:ring-focus focus-within:ring-offset-4"
       style={{ width: `${source.width}px` }}
     >
       <div className="relative" style={{ width: `${source.width}px`, height: `${source.height}px` }}>

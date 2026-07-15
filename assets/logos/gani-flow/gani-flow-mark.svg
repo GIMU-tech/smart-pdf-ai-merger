@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">GANI FLOW Layer G symbol</title>
+  <desc id="desc">Three stacked design layers form a bold letter G.</desc>
+  <defs>
+    <mask id="layer-g-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#000"/>
+      <rect x="112" y="96" width="320" height="320" rx="88" fill="#fff"/>
+      <rect x="184" y="168" width="176" height="176" rx="52" fill="#000"/>
+      <rect x="326" y="176" width="118" height="104" fill="#000"/>
+      <rect x="280" y="256" width="152" height="64" rx="20" fill="#fff"/>
+    </mask>
+  </defs>
+  <rect x="48" y="48" width="320" height="320" rx="88" fill="#C4B5FD"/>
+  <rect x="80" y="72" width="320" height="320" rx="88" fill="#8B5CF6"/>
+  <rect width="512" height="512" fill="#5B21B6" mask="url(#layer-g-cut)"/>
+</svg>

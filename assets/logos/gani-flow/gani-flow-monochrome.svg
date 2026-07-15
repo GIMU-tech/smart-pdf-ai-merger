@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 256" role="img" aria-labelledby="title desc">
+  <title id="title">GANI FLOW monochrome logo</title>
+  <desc id="desc">Single-color Layer G symbol with the GANI FLOW wordmark.</desc>
+  <defs>
+    <mask id="mono-g-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#000"/>
+      <rect x="112" y="96" width="320" height="320" rx="88" fill="#fff"/>
+      <rect x="184" y="168" width="176" height="176" rx="52" fill="#000"/>
+      <rect x="326" y="176" width="118" height="104" fill="#000"/>
+      <rect x="280" y="256" width="152" height="64" rx="20" fill="#fff"/>
+    </mask>
+    <symbol id="mono-layer-g" viewBox="0 0 512 512">
+      <rect x="48" y="48" width="320" height="320" rx="88" fill="none" stroke="#0F172A" stroke-width="24"/>
+      <rect x="80" y="72" width="320" height="320" rx="88" fill="none" stroke="#0F172A" stroke-width="24"/>
+      <rect width="512" height="512" fill="#0F172A" mask="url(#mono-g-cut)"/>
+    </symbol>
+  </defs>
+  <use href="#mono-layer-g" x="24" y="24" width="208" height="208"/>
+  <g font-family="Inter, Pretendard, Arial, sans-serif" fill="#0F172A">
+    <text x="260" y="145" font-size="74" font-weight="800" letter-spacing="1.5">GANI</text>
+    <text x="478" y="145" font-size="74" font-weight="650" letter-spacing="5">FLOW</text>
+    <text x="264" y="186" font-size="18" font-weight="650" letter-spacing="5.5">DESIGN FILE WORKSPACE</text>
+  </g>
+</svg>

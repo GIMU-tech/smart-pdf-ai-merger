@@ -6,9 +6,15 @@ import {
   ChevronLeft, ChevronRight, Hash, Type, LayoutTemplate, Box,
   MoveVertical, ImageIcon, CheckCircle2, Lock, Unlock,
   Layers, Columns, Split, CheckSquare, Square, Info, Sparkles, Filter, RotateCcw, ArrowRight,
-  Eye, Bot, PanelLeftClose, PanelLeft, Maximize2, Minimize2
+  Eye, Bot, PanelLeftClose, PanelLeft, Maximize2, Minimize2, Search
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { PageHeader } from '../../ui/layout/PageHeader';
+import { Alert } from '../../ui/primitives/Alert';
+import { Button } from '../../ui/primitives/Button';
+import { EmptyState } from '../../ui/primitives/EmptyState';
+import { Panel, PanelContent } from '../../ui/primitives/Panel';
+import { NewWorkButton } from '../../ui/workflow/NewWorkButton';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 type Diff = {
@@ -1010,36 +1016,45 @@ export function CompareTab({
     setShowSidebar(true);
   };
 
-  const DropZone = ({ file, setFile, inputRef, label, accent }: any) => (
+  const DropZone = ({ file, setFile, inputRef, label }: any) => (
     <div
       onDragOver={e => e.preventDefault()}
       onDrop={e => { e.preventDefault(); if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); }}
       onClick={() => inputRef.current?.click()}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          inputRef.current?.click();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`${label} PDF를 드래그하거나 클릭하여 선택`}
       className={cn(
-        'border-2 rounded-2xl bg-white/85 flex flex-col items-center justify-center gap-3 py-10 cursor-pointer transition-all select-none shadow-sm hover:shadow-md active:scale-[0.99]',
+        'flex min-h-40 cursor-pointer select-none flex-col items-center justify-center gap-3 rounded-panel border border-dashed p-5 text-center shadow-panel',
+        'transition-[color,background-color,border-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2',
         file
-          ? 'border-slate-500 bg-slate-50/70'
-          : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
+          ? 'border-border-strong bg-panel text-secondary'
+          : 'border-border-strong bg-subtle text-secondary hover:border-focus hover:bg-compare-subtle/40'
       )}
     >
       {file ? (
-        <div className="flex flex-col items-center gap-3">
-          <div className={cn(
-            'text-[10px] font-black px-2 py-0.5 rounded flex-shrink-0 bg-white shadow-sm border border-gray-150',
-            accent
-          )}>
+        <div className="flex min-w-0 flex-col items-center gap-2">
+          <div className="shrink-0 rounded-control border border-compare/20 bg-compare-subtle px-2 py-0.5 text-[10px] font-extrabold text-compare shadow-panel">
             PDF
           </div>
-          <p className="text-sm font-semibold text-gray-800 truncate max-w-[220px] text-center">{file.name}</p>
-          <span className="text-xs text-gray-400 font-medium tracking-wide font-mono">{(file.size / (1024 * 1024)).toFixed(2)} MB • {label}</span>
+          <p className="max-w-[260px] truncate text-[14px] leading-5 font-extrabold text-primary">{file.name}</p>
+          <span className="font-mono text-[12px] leading-5 text-secondary">{(file.size / (1024 * 1024)).toFixed(2)} MB · {label}</span>
         </div>
       ) : (
         <>
-          <div className="p-3 bg-gray-50 rounded-xl border border-gray-100 shadow-sm text-gray-400">
-            <Upload className="w-5 h-5" />
+          <span aria-hidden="true" className="grid size-12 place-items-center rounded-control bg-panel text-current shadow-panel">
+            <Upload className="size-5" />
+          </span>
+          <div className="space-y-1">
+            <p className="text-[14px] leading-5 font-extrabold text-primary">{label} PDF 선택</p>
+            <p className="text-[12px] leading-5 text-secondary">드래그하거나 클릭하여 업로드 · .pdf</p>
           </div>
-          <p className="text-sm font-semibold text-gray-700">{label} PDF 업로드</p>
-          <p className="text-xs text-gray-400">드래그 앤 드롭 또는 마우스 클릭</p>
         </>
       )}
       <input type="file" accept=".pdf" className="hidden" ref={inputRef}
@@ -1062,48 +1077,54 @@ export function CompareTab({
         // ═══════════════════════════════════════════════════════════════════════
         <motion.div 
           key="upload-view"
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -10 }}
-          className="flex flex-col gap-5"
-          style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}
+          initial={false}
+          className="flex flex-col gap-6"
         >
-          {/* Header */}
-          <div>
-            <h2 className="text-lg font-black tracking-tight text-slate-950">PDF 정밀 대조 검수</h2>
-            <p className="mt-1 text-xs font-semibold text-slate-500">
-              인쇄물 원본(Before)과 수정본(After)을 대조하여 텍스트·수치·도형 변경을 검출합니다.
-            </p>
-          </div>
+          <PageHeader
+            title="PDF 정밀 대조 검수"
+            description="인쇄물 원본(Before)과 수정본(After)을 대조하여 텍스트·수치·도형 변경을 검출합니다."
+            icon={<Search className="size-5" />}
+            iconClassName="text-rose-500"
+          />
 
           {/* Two dropzones side-by-side */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <DropZone file={fileA} setFile={setFileA} inputRef={refA} label="원본 (Before)" accent="text-blue-600" />
-            <DropZone file={fileB} setFile={setFileB} inputRef={refB} label="수정본 (After)" accent="text-orange-600" />
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <DropZone file={fileA} setFile={setFileA} inputRef={refA} label="원본 (Before)" />
+            <DropZone file={fileB} setFile={setFileB} inputRef={refB} label="수정본 (After)" />
           </div>
 
           {/* ═══ Mode Selection Cards ═══ */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2" role="radiogroup" aria-label="비교 방식 선택">
             {/* AI Precision Compare Card */}
-            <div
+            <Panel
               onClick={() => setCompareMode('ai')}
+              onKeyDown={e => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setCompareMode('ai');
+                }
+              }}
+              role="radio"
+              tabIndex={0}
+              aria-checked={compareMode === 'ai'}
               className={cn(
-                "relative rounded-2xl border-2 bg-white/90 p-5 cursor-pointer transition-all select-none",
+                'relative cursor-pointer select-none p-5 transition-[background-color,border-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2',
                 compareMode === 'ai'
-                  ? "border-blue-500 bg-blue-50/50 shadow-md shadow-blue-100/50 scale-[1.01]"
-                  : "border-slate-200 hover:border-slate-300 hover:shadow-md"
+                  ? 'border-compare bg-compare-subtle/45 shadow-panel'
+                  : 'hover:border-border-strong hover:bg-subtle'
               )}
             >
-              <div className="flex items-center gap-3 mb-3">
+              <div className="mb-3 flex items-center gap-3">
                 <div className={cn(
-                  "p-2.5 rounded-xl",
-                  compareMode === 'ai' ? "bg-blue-100 text-blue-600" : "bg-gray-100 text-gray-500"
+                  'grid size-10 shrink-0 place-items-center rounded-control',
+                  compareMode === 'ai' ? 'bg-compare text-white' : 'bg-subtle text-secondary'
                 )}>
-                  <Bot className="w-5 h-5" />
+                  <Bot className="size-5" aria-hidden="true" />
                 </div>
-                <div>
-                  <h3 className="text-sm font-black text-gray-900">🤖 인공지능 정밀 대조</h3>
-                  <p className="text-[10px] text-gray-500 font-medium">OCR & 구조 분석으로 변경점 자동 검출</p>
+                <div className="min-w-0">
+                  <h3 className="text-[14px] leading-5 font-extrabold text-primary">인공지능 정밀 대조</h3>
+                  <p className="text-[12px] leading-5 text-secondary">OCR & 구조 분석으로 변경점 자동 검출</p>
                 </div>
               </div>
 
@@ -1112,13 +1133,13 @@ export function CompareTab({
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
-                  className="flex flex-col gap-3 mt-3 border-t border-blue-100 pt-3"
+                  className="mt-3 flex flex-col gap-3 border-t border-compare/20 pt-3"
                 >
                   {/* Precision Slider */}
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">검수 정밀도</label>
-                      <span className="text-sm font-black text-blue-600 font-mono">{precision}%</span>
+                      <label className="text-[12px] font-bold text-secondary">검수 정밀도</label>
+                      <span className="font-mono text-[13px] font-extrabold text-compare">{precision}%</span>
                     </div>
                     <input
                       type="range"
@@ -1126,9 +1147,9 @@ export function CompareTab({
                       max="100"
                       value={precision}
                       onChange={e => setPrecision(parseInt(e.target.value, 10))}
-                      className="w-full accent-blue-600 cursor-pointer h-2 bg-gray-200 rounded-lg appearance-none"
+                      className="h-2 w-full cursor-pointer appearance-none rounded-full bg-border accent-compare focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2"
                     />
-                    <div className="flex justify-between text-[8px] text-gray-400 font-mono px-0.5">
+                    <div className="flex justify-between px-0.5 font-mono text-[10px] text-secondary">
                       <span>1% 관대</span>
                       <span>100% 초정밀</span>
                     </div>
@@ -1143,92 +1164,91 @@ export function CompareTab({
                     ] as const).map(([val, label, desc]) => (
                       <button
                         key={val}
-                        onClick={(e) => { e.stopPropagation(); setPrecision(val); }}
+                        onClick={(e) => { e.stopPropagation(); setCompareMode('ai'); setPrecision(val); }}
+                        aria-pressed={precision === val}
+                        aria-label={`${label}: ${desc}`}
+                        title={desc}
                         className={cn(
-                          "flex-1 flex flex-col items-center py-2 px-2 rounded-xl text-[10px] border transition-all cursor-pointer",
+                          'flex min-h-control-md flex-1 cursor-pointer flex-col items-center justify-center rounded-control border px-2 py-1.5 text-[10px] transition-[color,background-color,border-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2',
                           precision === val
-                            ? "bg-blue-600 text-white border-blue-600 shadow-md font-bold"
-                            : "bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:bg-blue-50"
+                            ? 'border-compare bg-compare text-white shadow-panel'
+                            : 'border-border bg-panel text-secondary hover:border-compare hover:bg-compare-subtle'
                         )}
                       >
-                        <span className="font-bold">{val}%</span>
-                        <span className={cn("text-[8px] mt-0.5", precision === val ? "text-blue-100" : "text-gray-400")}>{label}</span>
+                        <span className="font-extrabold">{val}%</span>
+                        <span className={cn('mt-0.5 text-[9px]', precision === val ? 'text-blue-100' : 'text-secondary')}>{label}</span>
                       </button>
                     ))}
                   </div>
                 </motion.div>
               )}
-            </div>
+            </Panel>
 
             {/* Visual Inspection Card */}
-            <div
+            <Panel
               onClick={() => setCompareMode('visual')}
+              onKeyDown={e => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setCompareMode('visual');
+                }
+              }}
+              role="radio"
+              tabIndex={0}
+              aria-checked={compareMode === 'visual'}
               className={cn(
-                "relative rounded-2xl border-2 p-5 cursor-pointer transition-all select-none",
+                'relative cursor-pointer select-none p-5 transition-[background-color,border-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2',
                 compareMode === 'visual'
-                  ? "border-amber-500 bg-amber-50/50 shadow-md shadow-amber-100/50 scale-[1.01]"
-                  : "border-slate-200 bg-white/90 hover:border-slate-300 hover:shadow-md"
+                  ? 'border-compare bg-compare-subtle/45 shadow-panel'
+                  : 'hover:border-border-strong hover:bg-subtle'
               )}
             >
-              <div className="flex items-center gap-3 mb-1">
+              <div className="mb-3 flex items-center gap-3">
                 <div className={cn(
-                  "p-2.5 rounded-xl",
-                  compareMode === 'visual' ? "bg-amber-100 text-amber-600" : "bg-gray-100 text-gray-500"
+                  'grid size-10 shrink-0 place-items-center rounded-control',
+                  compareMode === 'visual' ? 'bg-compare text-white' : 'bg-subtle text-secondary'
                 )}>
-                  <Eye className="w-5 h-5" />
+                  <Eye className="size-5" aria-hidden="true" />
                 </div>
-                <div>
-                  <h3 className="text-sm font-black text-gray-900">👁️ 즉시 육안 검수</h3>
-                  <p className="text-[10px] text-gray-500 font-medium">AI 분석 없이 초고속 뷰어로 즉시 대조</p>
+                <div className="min-w-0">
+                  <h3 className="text-[14px] leading-5 font-extrabold text-primary">즉시 육안 검수</h3>
+                  <p className="text-[12px] leading-5 text-secondary">AI 분석 없이 초고속 뷰어로 즉시 대조</p>
                 </div>
               </div>
-              <div className="mt-3 text-[10px] text-gray-500 leading-relaxed bg-gray-50 rounded-xl p-3 border border-gray-100">
-                <p>• 서버 AI 연산을 완전히 생략하고 <span className="font-bold text-gray-700">0.5초 이내</span> 초고속 렌더링</p>
+              <div className="space-y-1 rounded-control border border-border bg-subtle p-3 text-[12px] leading-5 text-secondary">
+                <p>• 서버 AI 연산을 생략하고 <span className="font-bold text-primary">0.5초 이내</span> 초고속 렌더링</p>
                 <p>• 듀얼 연동, 투명도 오버레이, 스와이프 슬라이더 뷰 모두 활용 가능</p>
-                <p>• <span className="font-bold text-gray-700">최대 5000% 선명 줌</span>으로 미세한 차이를 육안으로 확인</p>
+                <p>• <span className="font-bold text-primary">최대 5000% 선명 줌</span>으로 미세한 차이를 육안으로 확인</p>
                 <p>• 변경사항 하이라이트 없이 뷰어 도구만 활용하는 몰입형 모드</p>
               </div>
-            </div>
+            </Panel>
           </div>
 
           {/* Error Banner */}
           {error && (
-            <div className="flex items-center gap-2.5 text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-100 px-4 py-3 rounded-xl">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              <span className="flex-1 leading-normal">{error}</span>
-              <button onClick={() => setError(null)} className="text-rose-400 hover:text-rose-700 transition-colors">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+            <Alert
+              variant="danger"
+              icon={<AlertCircle className="size-4" />}
+              onDismiss={() => setError(null)}
+              dismissLabel="비교 오류 닫기"
+            >
+              {error}
+            </Alert>
           )}
 
           {/* Trigger compare button */}
-          <button
+          <Button
             onClick={runCompare}
             disabled={comparing || !fileA || !fileB}
-            className={cn(
-              'w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl text-xs font-bold transition-all shadow-md select-none',
-              comparing || !fileA || !fileB
-                ? 'bg-gray-100 text-gray-300 cursor-not-allowed border border-gray-100 shadow-none'
-                : compareMode === 'visual'
-                  ? 'bg-amber-600 text-white hover:bg-amber-500 active:scale-[0.99] cursor-pointer'
-                  : 'bg-slate-950 text-white hover:bg-slate-800 active:scale-[0.99] cursor-pointer'
-            )}
+            loading={comparing}
+            loadingLabel={isVisualMode ? '초고속 렌더링 중…' : `정밀도 ${precision}% 대조 분석 연산 중…`}
+            startIcon={isVisualMode ? <Eye className="size-4" /> : <Sparkles className="size-4" />}
+            size="lg"
+            className="w-full"
           >
-            {comparing ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-                <span>{isVisualMode ? '초고속 렌더링 중...' : `정밀도 ${precision}% 대조 분석 연산 중 (하이브리드 OCR 작동)...`}</span>
-              </>
-            ) : (
-              <>
-                {isVisualMode ? <Eye className="w-4 h-4" /> : <Sparkles className="w-4 h-4 text-amber-400" />}
-                <span>
-                  {isVisualMode ? '즉시 육안 검수 시작' : `정밀도 ${precision}% 하이브리드 대조 검수 시작`}
-                </span>
-              </>
-            )}
-          </button>
+            {isVisualMode ? '즉시 육안 검수 시작' : `정밀도 ${precision}% 하이브리드 대조 검수 시작`}
+          </Button>
         </motion.div>
       ) : comparing ? (
         <motion.div
@@ -1236,39 +1256,42 @@ export function CompareTab({
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
-          className="w-full max-w-2xl mx-auto mt-14 rounded-2xl border border-slate-200 bg-white/90 p-7 shadow-sm"
-          style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}
+          className="mx-auto mt-14 w-full max-w-2xl"
+          role="status"
+          aria-live="polite"
         >
-          <div className="flex items-start gap-4">
-            <div className="relative flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-sm">
-              <Loader2 className="h-5 w-5 animate-spin" />
+          <Panel>
+            <PanelContent className="flex items-start gap-4 p-7">
+            <div className="relative grid size-12 shrink-0 place-items-center rounded-control bg-action text-on-action shadow-panel">
+              <Loader2 className="size-5 animate-spin" aria-hidden="true" />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-base font-black text-gray-900">비교 분석 중</h2>
-                <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[10px] font-bold text-gray-500">
+                <h2 className="text-[16px] leading-6 font-extrabold text-primary">비교 분석 중</h2>
+                <span className="rounded-full border border-border bg-subtle px-2.5 py-1 font-mono text-[10px] font-bold text-secondary">
                   {compareElapsedLabel}
                 </span>
               </div>
-              <p className="mt-2 text-sm font-semibold text-gray-700">
+              <p className="mt-2 text-[13px] leading-5 font-semibold text-secondary">
                 {compareStage || (isVisualMode ? 'PDF 렌더링 중' : 'PDF 구조/텍스트/이미지 차이 분석 중')}
               </p>
-              <div className="mt-5 h-2 overflow-hidden rounded-full bg-gray-100">
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-subtle">
                 <motion.div
-                  className="h-full rounded-full bg-gray-900"
+                  className="h-full rounded-full bg-action"
                   initial={{ x: '-100%' }}
                   animate={{ x: ['-100%', '120%'] }}
                   transition={{ repeat: Infinity, duration: 1.25, ease: 'easeInOut' }}
                   style={{ width: '45%' }}
                 />
               </div>
-              <div className="mt-4 grid grid-cols-3 gap-2 text-[10px] font-bold text-gray-500">
-                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">업로드</div>
-                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">렌더링</div>
-                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">차이 분석</div>
+              <div className="mt-4 grid grid-cols-3 gap-2 text-[10px] font-bold text-secondary">
+                <div className="rounded-control border border-border bg-subtle px-3 py-2">업로드</div>
+                <div className="rounded-control border border-border bg-subtle px-3 py-2">렌더링</div>
+                <div className="rounded-control border border-border bg-subtle px-3 py-2">차이 분석</div>
               </div>
             </div>
-          </div>
+            </PanelContent>
+          </Panel>
         </motion.div>
       ) : results && results.length === 0 ? (
         // ═══════════════════════════════════════════════════════════════════════
@@ -1279,25 +1302,20 @@ export function CompareTab({
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
-          className="flex flex-col items-center justify-center gap-6 py-20 bg-white/90 border border-slate-200 rounded-3xl shadow-sm text-center max-w-xl mx-auto mt-12"
-          style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}
+          className="mx-auto mt-12 w-full max-w-xl"
         >
-          <div className="p-4 bg-emerald-50 text-emerald-600 rounded-full border border-emerald-100 shadow-md">
-            <CheckCircle2 className="w-10 h-10" />
-          </div>
-          <div>
-            <h2 className="text-lg font-black text-gray-900">비교 결과: 100% 일치하는 문서</h2>
-            <p className="text-sm text-gray-500 mt-2 max-w-sm leading-relaxed">
-              두 PDF 문서 간의 의미적 텍스트, 금액 수치, 기하학적 레이아웃이 완전히 동일합니다. 변경된 내용이 존재하지 않습니다.
-            </p>
-          </div>
-          <button
-            onClick={resetAll}
-            className="flex items-center gap-2 px-5 py-2.5 bg-slate-950 text-white hover:bg-slate-800 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
-          >
-            <RotateCcw className="w-4 h-4" />
-            다른 PDF 대조하기
-          </button>
+          <Panel>
+            <EmptyState
+              icon={<CheckCircle2 className="size-6 text-success" />}
+              title="비교 결과: 100% 일치하는 문서"
+              description="두 PDF 문서 간의 의미적 텍스트, 금액 수치, 기하학적 레이아웃이 완전히 동일합니다. 변경된 내용이 존재하지 않습니다."
+              primaryAction={(
+                <Button onClick={resetAll} startIcon={<RotateCcw className="size-4" />}>
+                  새 비교
+                </Button>
+              )}
+            />
+          </Panel>
         </motion.div>
       ) : hasData ? (
         // ═══════════════════════════════════════════════════════════════════════
@@ -1315,13 +1333,12 @@ export function CompareTab({
           {/* ── 1. Header Control HUD ── */}
           <div className={cn("flex items-center justify-between px-3 h-11 border-b border-gray-200 bg-white flex-shrink-0 z-10 shadow-sm select-none", isVisualMode && "hidden")}>
             <div className={cn("flex items-center gap-2", isVisualMode && "hidden")}>
-              <button 
-                onClick={resetAll}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-800 rounded-xl text-[10.5px] font-black border border-gray-150 transition-all active:scale-95 cursor-pointer"
-              >
-                <ArrowRight className="w-3 h-3 rotate-180" />
-                새 파일
-              </button>
+              <NewWorkButton
+                onConfirm={resetAll}
+                label="새 비교"
+                confirmationMessage="현재 비교 결과를 비우고 새 비교를 시작할까요?"
+                className="h-8 text-[10.5px]"
+              />
               <div className="w-px h-5 bg-gray-250" />
               <div>
                 <h2 className="text-xs font-black text-gray-900 tracking-tight flex items-center gap-2">
@@ -1409,7 +1426,7 @@ export function CompareTab({
           <div className="flex flex-1 min-h-0">
             {isVisualMode && (
               <div className="w-16 flex-shrink-0 border-r border-gray-200 bg-white p-2 flex flex-col items-center gap-2 shadow-sm select-none">
-                <button onClick={resetAll} className="w-11 h-9 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-600 flex items-center justify-center cursor-pointer" title="새 파일">
+                <button onClick={resetAll} className="w-11 h-9 rounded-xl border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-600 flex items-center justify-center cursor-pointer" title="새 비교" aria-label="새 비교">
                   <ArrowRight className="w-4 h-4 rotate-180" />
                 </button>
                 <div className="w-full h-px bg-gray-200" />

@@ -3,11 +3,9 @@ import { PDFDocument } from 'pdf-lib';
 import { motion, AnimatePresence } from 'motion/react';
 import JSZip from 'jszip';
 import {
-  Upload,
   FilePlus2,
   Trash2,
   Download,
-  Loader2,
   AlertCircle,
   X,
   CheckCircle2,
@@ -33,11 +31,24 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import { cn } from './lib/utils';
+import { moveSelectedItemsAroundTarget, moveSelectedItemsToPosition } from './lib/listOrder';
 import { CompareTab } from './features/compare/CompareTab';
 import { IllustratorViewerTab } from './features/illustrator/IllustratorViewerTab';
 import { ImageToolkitTab } from './features/images/ImageToolkitTab';
 import type { ImageToolMode } from './features/images/types';
 import { GifStudioTab } from './features/gif-studio/GifStudioTab';
+import { getLayoutMode } from './app/layoutMode';
+import type { AppTab } from './app/navigation';
+import { AppShell } from './ui/shell/AppShell';
+import { PageHeader } from './ui/layout/PageHeader';
+import { Alert } from './ui/primitives/Alert';
+import { Button } from './ui/primitives/Button';
+import { Field, fieldControlClassName } from './ui/primitives/Field';
+import { Panel, PanelContent, PanelFooter, PanelHeader } from './ui/primitives/Panel';
+import { FileWorkflowGate } from './ui/workflow/FileWorkflowGate';
+import { NewWorkButton } from './ui/workflow/NewWorkButton';
+import { EditableOrderNumber } from './ui/workflow/EditableOrderNumber';
+import { GANI_FLOW_MARK_URL, GaniFlowLogo } from './ui/brand/GaniFlowLogo';
 
 interface FileItem {
   id: string;
@@ -59,8 +70,6 @@ type DownloadItem = {
   pageNumber?: number;
   totalPages?: number;
 };
-
-type AppTab = 'home' | 'merge' | 'split' | 'outline' | 'compare' | 'illustrator' | 'images' | 'gif';
 
 type FeatureCard = {
   tab: Exclude<AppTab, 'home'>;
@@ -484,9 +493,10 @@ export default function App() {
 
   // ── Merge tab state ──
   const [mergeFiles, setMergeFiles] = useState<FileItem[]>([]);
-  const [mergeDragging, setMergeDragging] = useState(false);
-  const [mergeSortingId, setMergeSortingId] = useState<string | null>(null);
+  const [mergeDraggingIds, setMergeDraggingIds] = useState<string[]>([]);
   const [mergeDropTarget, setMergeDropTarget] = useState<{ id: string; position: DropInsertPosition } | null>(null);
+  const [mergeSelectedIds, setMergeSelectedIds] = useState<Set<string>>(() => new Set());
+  const [mergeSelectionAnchorId, setMergeSelectionAnchorId] = useState<string | null>(null);
   const [isMerging, setIsMerging] = useState(false);
   const [mergeOutputName, setMergeOutputName] = useState('');
   const [mergeError, setMergeError] = useState<string | null>(null);
@@ -494,36 +504,31 @@ export default function App() {
 
   // ── Split tab state ──
   const [splitFile, setSplitFile] = useState<File | null>(null);
-  const [splitDragging, setSplitDragging] = useState(false);
   const [isSplitting, setIsSplitting] = useState(false);
   const [splitOutputName, setSplitOutputName] = useState('');
   const [splitError, setSplitError] = useState<string | null>(null);
   const [splitSuccess, setSplitSuccess] = useState<string | null>(null);
   const [splitDownloads, setSplitDownloads] = useState<DownloadItem[]>([]);
   const [splitNameRule, setSplitNameRule] = useState(DEFAULT_SPLIT_NAME_RULE);
-  const splitInputRef = useRef<HTMLInputElement>(null);
 
   // ── Outline tab state ──
   const [outlineFile, setOutlineFile] = useState<File | null>(null);
-  const [outlineDragging, setOutlineDragging] = useState(false);
   const [outlineName, setOutlineName] = useState('');
   const [isOutlining, setIsOutlining] = useState(false);
   const [outlineError, setOutlineError] = useState<string | null>(null);
   const [outlineSuccess, setOutlineSuccess] = useState<string | null>(null);
   const [outlineDownloads, setOutlineDownloads] = useState<DownloadItem[]>([]);
   const [outlineResultName, setOutlineResultName] = useState('');
-  const outlineInputRef = useRef<HTMLInputElement>(null);
 
   // ── Compare tab state ──
   const [compareResults, setCompareResults] = useState<any[] | null>(null);
   const [compareExpanded, setCompareExpanded] = useState(false);
 
   // ── Merge handlers ──
-  const addMergeFiles = (uploaded: FileList | null) => {
+  const addMergeFiles = (uploaded: FileList | File[] | null) => {
     if (!uploaded) return;
     const valid: FileItem[] = [];
-    for (let i = 0; i < uploaded.length; i++) {
-      const f = uploaded[i];
+    for (const f of Array.from(uploaded)) {
       const ext = extensionOfName(f.name);
       if (MERGE_EXTENSIONS.includes(ext)) {
         valid.push({ id: crypto.randomUUID(), file: f, name: f.name, size: f.size });
@@ -537,22 +542,25 @@ export default function App() {
     setMergeError(null);
   };
 
-  const handleMergeDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setMergeDragging(false);
-    addMergeFiles(e.dataTransfer.files);
+  const resetMergeWork = () => {
+    setMergeFiles([]);
+    setMergeOutputName('');
+    setMergeError(null);
+    setMergeDraggingIds([]);
+    setMergeDropTarget(null);
+    setMergeSelectedIds(new Set());
+    setMergeSelectionAnchorId(null);
+    if (mergeInputRef.current) mergeInputRef.current.value = '';
   };
 
-  const moveMergeFile = (id: string, direction: -1 | 1) => {
-    setMergeFiles(current => {
-      const currentIndex = current.findIndex(item => item.id === id);
-      const nextIndex = currentIndex + direction;
-      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= current.length) return current;
-
-      const next = [...current];
-      [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
+  const removeMergeFile = (id: string) => {
+    setMergeFiles(current => current.filter(item => item.id !== id));
+    setMergeSelectedIds(current => {
+      const next = new Set(current);
+      next.delete(id);
       return next;
     });
+    if (mergeSelectionAnchorId === id) setMergeSelectionAnchorId(null);
   };
 
   const getDropInsertPosition = (event: React.DragEvent<HTMLElement>): DropInsertPosition => {
@@ -560,20 +568,35 @@ export default function App() {
     return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
   };
 
-  const reorderMergeFile = (sourceId: string | null, targetId: string, position: DropInsertPosition = 'before') => {
-    if (!sourceId || sourceId === targetId) return;
-    setMergeFiles(current => {
-      const sourceIndex = current.findIndex(item => item.id === sourceId);
-      const targetIndex = current.findIndex(item => item.id === targetId);
-      if (sourceIndex < 0 || targetIndex < 0) return current;
+  const toggleMergeFileSelection = (id: string, selectRange = false) => {
+    if (selectRange && mergeSelectionAnchorId) {
+      const anchorIndex = mergeFiles.findIndex(item => item.id === mergeSelectionAnchorId);
+      const targetIndex = mergeFiles.findIndex(item => item.id === id);
+      if (anchorIndex >= 0 && targetIndex >= 0) {
+        const [start, end] = anchorIndex < targetIndex
+          ? [anchorIndex, targetIndex]
+          : [targetIndex, anchorIndex];
+        setMergeSelectedIds(current => {
+          const next = new Set(current);
+          mergeFiles.slice(start, end + 1).forEach(item => next.add(item.id));
+          return next;
+        });
+        return;
+      }
+    }
 
-      const next = [...current];
-      const [moved] = next.splice(sourceIndex, 1);
-      const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-      const insertIndex = position === 'after' ? adjustedTargetIndex + 1 : adjustedTargetIndex;
-      next.splice(insertIndex, 0, moved);
+    setMergeSelectedIds(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
+    setMergeSelectionAnchorId(id);
+  };
+
+  const reorderMergeFiles = (movingIds: string[], targetId: string, position: DropInsertPosition = 'before') => {
+    if (movingIds.length === 0 || movingIds.includes(targetId)) return;
+    setMergeFiles(current => moveSelectedItemsAroundTarget(current, movingIds, targetId, position, (item: FileItem) => item.id));
   };
 
   const runMerge = async () => {
@@ -642,10 +665,18 @@ export default function App() {
     setSplitNameRule(DEFAULT_SPLIT_NAME_RULE);
   };
 
-  const handleSplitDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setSplitDragging(false);
-    if (e.dataTransfer.files.length > 0) setSplitTarget(e.dataTransfer.files[0]);
+  const resetSplitWork = () => {
+    setSplitFile(null);
+    setSplitOutputName('');
+    setSplitSuccess(null);
+    setSplitError(null);
+    setSplitDownloads([]);
+    setSplitNameRule(DEFAULT_SPLIT_NAME_RULE);
+  };
+
+  const moveMergeFilesToPosition = (id: string, position: number) => {
+    const movingIds = mergeSelectedIds.has(id) ? mergeSelectedIds : new Set([id]);
+    setMergeFiles(current => moveSelectedItemsToPosition(current, movingIds, position, (item: FileItem) => item.id));
   };
 
   const runSplit = async () => {
@@ -711,10 +742,13 @@ export default function App() {
     setOutlineResultName('');
   };
 
-  const handleOutlineDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setOutlineDragging(false);
-    if (e.dataTransfer.files.length > 0) setOutlineTarget(e.dataTransfer.files[0]);
+  const resetOutlineWork = () => {
+    setOutlineFile(null);
+    setOutlineName('');
+    setOutlineError(null);
+    setOutlineSuccess(null);
+    setOutlineDownloads([]);
+    setOutlineResultName('');
   };
 
   const runOutlining = async () => {
@@ -831,17 +865,6 @@ export default function App() {
     }
   };
 
-  const navItems: { tab: AppTab; label: string; icon: React.ComponentType<{ className?: string }>; beta?: boolean }[] = [
-    { tab: 'home', label: '홈', icon: Home },
-    { tab: 'merge', label: '병합', icon: Files },
-    { tab: 'split', label: '분리', icon: FileOutput },
-    { tab: 'outline', label: '출력', icon: Printer },
-    { tab: 'compare', label: '비교', icon: Search },
-    { tab: 'illustrator', label: '뷰어', icon: FileImage },
-    { tab: 'images', label: '이미지', icon: Images },
-    { tab: 'gif', label: 'GIF 생성', icon: Film, beta: true },
-  ];
-
   const downloadOutlineItem = (item: DownloadItem) => {
     downloadBlob(item.blob, item.fileName);
   };
@@ -915,73 +938,24 @@ export default function App() {
     splitDownloads[0]?.pageNumber || 1,
     splitDownloads[0]?.totalPages || splitDownloads.length || 4
   )}.pdf`;
+  const layoutMode = getLayoutMode(activeTab, {
+    hasCompareResults: Boolean(compareResults?.length),
+    compareExpanded,
+  });
 
   return (
-    <div className="min-h-screen bg-[#fbfcfd] text-slate-950 flex flex-col bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.025)_1px,transparent_0)] [background-size:22px_22px]" style={{ fontFamily: "'Inter', 'Noto Sans KR', system-ui, sans-serif" }}>
-
-      {/* ── Top bar ── */}
-      {activeTab !== 'illustrator' && activeTab !== 'home' && (
-      <header className="h-14 flex-shrink-0 border-b border-slate-200/80 bg-white/95 px-4 backdrop-blur">
-        <div className="flex h-full items-center justify-between gap-4">
-        <button onClick={() => setActiveTab('home')} className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm" title="홈">
-          <FilePlus2 className="h-4 w-4" />
-        </button>
-        <nav className="flex min-w-0 items-center justify-end gap-2 overflow-x-auto">
-          {navItems.map(({ tab, label, icon: NavIcon, beta }) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setActiveTab(tab)}
-              aria-label={`${label}${beta ? ' 베타' : ''}`}
-              className={cn(
-                'group flex h-9 flex-shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 text-xs font-bold leading-none transition',
-                activeTab === tab
-                  ? 'bg-slate-100 text-slate-950'
-                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
-              )}
-              title={label}
-            >
-              <NavIcon className="h-3.5 w-3.5" />
-              <span>{label}</span>
-              {beta && (
-                <span className="rounded-md bg-pink-100 px-1.5 py-0.5 text-[9px] font-black tracking-wide text-pink-700">
-                  BETA
-                </span>
-              )}
-            </button>
-          ))}
-        </nav>
-        </div>
-      </header>
-      )}
-
-      {/* ── Content ── */}
-      <main className={cn(
-        "flex-grow flex flex-col w-full min-h-0 min-w-0 transition-all duration-300",
-        activeTab === 'home'
-          ? "max-w-none p-0 bg-white h-screen"
-          : activeTab === 'compare'
-          ? (compareResults && compareResults.length > 0) || compareExpanded
-            ? "max-w-none p-4 bg-[#fbfcfd]/80 h-[calc(100vh-56px)]"
-            : "max-w-2xl mx-auto px-6 py-10 gap-5"
-          : activeTab === 'illustrator'
-            ? "max-w-none p-0 bg-[#fbfcfd] h-screen"
-          : activeTab === 'images'
-            ? "max-w-none p-0 bg-[#fbfcfd] h-[calc(100vh-56px)]"
-            : activeTab === 'gif'
-              ? "max-w-none p-5 bg-[#fbfcfd] h-[calc(100vh-56px)]"
-            : "max-w-2xl mx-auto px-6 py-10 gap-5"
-      )}>
+    <AppShell activeTab={activeTab} layoutMode={layoutMode} onTabChange={setActiveTab}>
 
         {/* ── HOME DASHBOARD ── */}
-        <div style={{ display: activeTab === 'home' ? 'flex' : 'none' }} className="h-full w-full animate-fadeIn bg-[#fbfcfd] text-slate-950">
-          <aside className="flex h-full w-[72px] flex-shrink-0 flex-col items-center border-r border-slate-200/80 bg-white px-2 py-4">
+        <div style={{ display: activeTab === 'home' ? 'flex' : 'none' }} className="h-full w-full animate-fadeIn bg-app text-primary">
+          <aside className="flex h-full w-[72px] flex-shrink-0 flex-col items-center border-r border-border bg-panel px-2 py-4">
             <button
               onClick={() => setActiveTab('home')}
-              className="mb-8 flex h-9 w-9 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm"
-              title="PDF & AI 툴킷"
+              className="mb-8 flex h-11 w-11 items-center justify-center rounded-panel border border-violet-100 bg-panel shadow-panel transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-floating focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              aria-label="GANI FLOW 홈"
+              title="GANI FLOW"
             >
-              <FilePlus2 className="h-4 w-4" />
+              <img src={GANI_FLOW_MARK_URL} alt="" aria-hidden="true" className="h-9 w-9" draggable={false} />
             </button>
 
             <div className="flex flex-1 flex-col items-center gap-3">
@@ -995,9 +969,9 @@ export default function App() {
                     onClick={() => item.tab && setActiveTab(item.tab)}
                     aria-label={`${item.label}${item.beta ? ' 베타' : ''}`}
                     className={cn(
-                      'group flex w-full flex-col items-center gap-1 rounded-2xl px-1.5 py-2 text-[10px] font-bold transition',
-                      active ? 'bg-slate-100 text-slate-950' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900',
-                      item.muted && 'text-slate-400'
+                      'group flex w-full flex-col items-center gap-1 rounded-control px-1.5 py-2 text-[10px] font-bold transition-colors',
+                      active ? 'bg-selected text-primary' : 'text-muted hover:bg-subtle hover:text-primary',
+                      item.muted && !active && 'text-disabled-text'
                     )}
                     title={item.label}
                   >
@@ -1005,7 +979,7 @@ export default function App() {
                     <span className="flex items-center gap-0.5 leading-none">
                       <span>{item.label}</span>
                       {item.beta && (
-                        <span className="rounded bg-pink-100 px-1 py-0.5 text-[7px] font-black tracking-wide text-pink-700">
+                        <span className="rounded bg-gif-subtle px-1 py-0.5 text-[7px] font-extrabold tracking-wide text-gif">
                           BETA
                         </span>
                       )}
@@ -1016,10 +990,10 @@ export default function App() {
             </div>
 
             <div className="flex flex-col items-center gap-2">
-              <button className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-50 hover:text-slate-700" title="설정">
+              <button className="flex h-9 w-9 items-center justify-center rounded-control text-muted transition-colors hover:bg-subtle hover:text-primary" title="설정">
                 <Settings className="h-4 w-4" />
               </button>
-              <button className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-50 hover:text-slate-700" title="더보기">
+              <button className="flex h-9 w-9 items-center justify-center rounded-control text-muted transition-colors hover:bg-subtle hover:text-primary" title="더보기">
                 <MoreHorizontal className="h-4 w-4" />
               </button>
             </div>
@@ -1035,25 +1009,21 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 className="w-full max-w-[1220px] -translate-y-[6vh] lg:-translate-y-[9vh]"
               >
-                <div className="mx-auto max-w-[820px] px-1 text-center">
-                  <div className="flex flex-col items-center">
-                    <div className="min-w-0">
-                      <h1 className="text-[30px] font-extrabold tracking-tight text-slate-950 sm:text-[38px]">
-                        디자인 통합 작업 허브 2.0
-                      </h1>
-                      <p className="mt-2 text-sm font-medium text-slate-500">
-                        파일 정리, 변환, 검수, 이미지 작업을 한 곳에서 시작합니다.
-                      </p>
-                    </div>
-                  </div>
+                <div className="mx-auto max-w-[820px] origin-center translate-y-2 scale-[1.15] px-1 text-center">
+                  <h1 className="flex justify-center">
+                    <GaniFlowLogo showDescriptor />
+                  </h1>
+                  <p className="mt-4 text-sm font-medium text-slate-500">
+                    파일 정리, 변환, 검수, 이미지 작업을 한 흐름으로 시작합니다.
+                  </p>
                 </div>
 
-                <div className="mx-auto mt-14 w-full max-w-full rounded-[28px] border border-slate-200/80 bg-white/85 shadow-[0_24px_90px_rgba(15,23,42,0.10)] ring-1 ring-white/80 backdrop-blur lg:w-fit">
+                <div className="mx-auto mt-14 w-full max-w-full lg:w-fit">
                   <div className="overflow-x-auto lg:overflow-visible">
                     <div className="flex min-w-full w-max flex-nowrap justify-center px-7 py-6 md:px-8">
                       {workspaceGroups.map(group => (
-                        <div key={group.label} className="relative flex-shrink-0 w-fit min-w-0 px-5 py-2 after:hidden after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-300/85 lg:py-1 lg:after:block first:lg:pl-0 last:lg:pr-0 last:after:hidden">
-                      <p className="mb-4 text-center text-xs font-black text-slate-500">{group.label}</p>
+                        <div key={group.label} className="relative flex-shrink-0 w-fit min-w-0 px-5 py-2 after:hidden after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-border-strong lg:py-1 lg:after:block first:lg:pl-0 last:lg:pr-0 last:after:hidden">
+                      <p className="mb-4 text-center text-xs font-normal text-muted">{group.label}</p>
                       <div className="flex flex-nowrap justify-center gap-3">
                         {uniqueWorkspaceItems(group.items).map(item => {
                           const Icon = item.icon;
@@ -1069,16 +1039,16 @@ export default function App() {
                               onMouseLeave={() => setHoveredWorkspaceKey(current => current === itemKey ? null : current)}
                               onFocus={() => setHoveredWorkspaceKey(itemKey)}
                               onBlur={() => setHoveredWorkspaceKey(current => current === itemKey ? null : current)}
-                              className="group relative flex w-[98px] flex-col items-center gap-2 rounded-2xl px-2 py-2.5 text-center transition hover:bg-slate-50/90 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                              className="group relative flex w-[98px] flex-col items-center gap-2 rounded-panel px-2 py-2.5 text-center transition hover:bg-subtle hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                             >
                               {previewVisible && <WorkspaceHoverPreview item={item} />}
-                              <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200/90 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.08)] transition group-hover:-translate-y-0.5 group-hover:border-slate-300 group-hover:shadow-[0_14px_34px_rgba(15,23,42,0.12)]">
+                              <span className="flex h-10 w-10 items-center justify-center transition-transform group-hover:-translate-y-0.5 group-hover:scale-110">
                                 <Icon className={cn('h-5 w-5', item.color)} />
                               </span>
-                              <span className="flex items-center justify-center gap-1 text-xs font-black text-slate-950">
+                              <span className="flex flex-nowrap items-center justify-center gap-1 whitespace-nowrap text-xs font-bold text-slate-900">
                                 <span>{item.title}</span>
                                 {item.beta && (
-                                  <span className="rounded-md bg-pink-100 px-1.5 py-0.5 text-[8px] font-black tracking-wide text-pink-700">
+                                  <span className="rounded-md bg-gif-subtle px-1.5 py-0.5 text-[8px] font-extrabold tracking-wide text-gif">
                                     BETA
                                   </span>
                                 )}
@@ -1162,78 +1132,145 @@ export default function App() {
         </div>
 
         {/* ════ TAB 1: MERGE ════ */}
-        <div style={{ display: activeTab === 'merge' ? 'flex' : 'none' }} className="flex-col gap-5 w-full flex animate-fadeIn">
-          <div>
-            <h2 className="text-lg font-black tracking-tight text-slate-950">PDF 병합</h2>
-            <p className="mt-1 text-xs font-semibold text-slate-400">PDF와 AI 파일을 순서대로 하나의 PDF로 합칩니다.</p>
-          </div>
-
-          {/* Drop zone */}
-          <div
-            onDragOver={e => { e.preventDefault(); setMergeDragging(true); }}
-            onDragLeave={() => setMergeDragging(false)}
-            onDrop={handleMergeDrop}
-            onClick={() => mergeInputRef.current?.click()}
-            className={cn(
-              'border rounded-2xl bg-white/85 flex flex-col items-center justify-center gap-2 py-10 cursor-pointer transition-all select-none shadow-sm',
-              mergeDragging
-                ? 'border-slate-400 bg-slate-50'
-                : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
-            )}
-          >
-            <Upload className="w-5 h-5 text-gray-300" />
-            <p className="text-sm text-gray-400">파일을 드래그하거나 클릭하여 추가</p>
-            <p className="text-xs text-gray-300">.pdf · .ai · .png · .jpg · .webp · .gif · .bmp · .svg</p>
-            <input
-              ref={mergeInputRef}
-              type="file"
-              multiple
+        <div style={{ display: activeTab === 'merge' ? 'flex' : 'none' }} className="flex w-full flex-col gap-6">
+          {mergeFiles.length === 0 ? (
+            <FileWorkflowGate
+              title="PDF 병합"
+              description="PDF와 AI 파일을 순서대로 하나의 PDF로 합칩니다."
+              featureIcon={<Files className="size-5" />}
+              featureIconClassName="text-sky-500"
+              uploadTitle="병합할 파일을 드래그하거나 클릭하여 선택"
+              uploadDescription=".pdf · .ai · .png · .jpg · .webp · .gif · .bmp · .svg"
               accept=".pdf,.ai,.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,image/*"
-              className="hidden"
-              onChange={e => addMergeFiles(e.target.files)}
+              multiple
+              onFiles={addMergeFiles}
             />
-          </div>
+          ) : (
+            <PageHeader
+              title="PDF 병합"
+              description="PDF와 AI 파일을 순서대로 하나의 PDF로 합칩니다."
+              icon={<Files className="size-5" />}
+              iconClassName="text-sky-500"
+              actions={(
+                <>
+                  <input
+                    ref={mergeInputRef}
+                    type="file"
+                    multiple
+                    accept=".pdf,.ai,.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,image/*"
+                    className="sr-only"
+                    onChange={e => {
+                      addMergeFiles(e.target.files);
+                      e.currentTarget.value = '';
+                    }}
+                  />
+                  <Button variant="outline" size="sm" onClick={() => mergeInputRef.current?.click()} startIcon={<FilePlus2 className="size-4" />}>
+                    파일 추가
+                  </Button>
+                  <NewWorkButton onConfirm={resetMergeWork} />
+                </>
+              )}
+            />
+          )}
 
           {/* Error */}
           <AnimatePresence>
             {mergeError && (
-              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                className="flex items-center gap-2 text-sm text-red-500 bg-red-50 border border-red-100 px-4 py-2.5 rounded-lg">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span className="flex-1">{mergeError}</span>
-                <button onClick={() => setMergeError(null)}><X className="w-4 h-4" /></button>
+              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <Alert
+                  variant="danger"
+                  icon={<AlertCircle className="size-4" />}
+                  onDismiss={() => setMergeError(null)}
+                  dismissLabel="병합 오류 닫기"
+                >
+                  {mergeError}
+                </Alert>
               </motion.div>
             )}
           </AnimatePresence>
 
           {/* File list */}
           {mergeFiles.length > 0 && (
-            <div className="border border-slate-200 rounded-2xl overflow-hidden animate-fadeIn bg-white/90 shadow-sm">
-              <div className="px-4 py-3 border-b border-slate-100 flex justify-between items-center bg-slate-50/70">
-                <span className="text-xs text-gray-400 font-medium">{mergeFiles.length}개 파일</span>
-                <button onClick={() => setMergeFiles([])} className="text-xs text-gray-400 hover:text-red-500 transition-colors">전체 제거</button>
-              </div>
-              <ul className="divide-y divide-gray-50">
+            <Panel>
+              <PanelHeader className="flex items-center justify-between bg-subtle py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="shrink-0 text-[12px] font-semibold text-secondary">{mergeFiles.length}개 파일</span>
+                  {mergeSelectedIds.size > 0 && (
+                    <span className="shrink-0 rounded-control bg-selected px-2 py-1 text-[11px] font-bold text-primary">
+                      {mergeSelectedIds.size}개 선택
+                    </span>
+                  )}
+                  <span className="truncate text-[11px] font-medium text-muted">순번을 더블클릭하면 원하는 위치로 이동합니다.</span>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      if (mergeSelectedIds.size === mergeFiles.length) {
+                        setMergeSelectedIds(new Set());
+                        setMergeSelectionAnchorId(null);
+                      } else {
+                        setMergeSelectedIds(new Set(mergeFiles.map(item => item.id)));
+                        setMergeSelectionAnchorId(mergeFiles[0]?.id || null);
+                      }
+                    }}
+                  >
+                    {mergeSelectedIds.size === mergeFiles.length ? '선택 해제' : '전체 선택'}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={resetMergeWork} className="text-muted hover:text-danger">
+                    전체 제거
+                  </Button>
+                </div>
+              </PanelHeader>
+              <PanelContent className="p-0">
+              <ul className="divide-y divide-border">
                 {mergeFiles.map((f, idx) => {
                   const ext = extensionOfName(f.name);
                   const isAi = ext === 'ai';
                   const isPdf = ext === 'pdf';
-                  const isDropTarget = mergeDropTarget?.id === f.id && mergeSortingId !== f.id;
+                  const isSelected = mergeSelectedIds.has(f.id);
+                  const isDragging = mergeDraggingIds.includes(f.id);
+                  const isDropTarget = mergeDropTarget?.id === f.id && !isDragging;
+                  const movingCount = isSelected ? mergeSelectedIds.size : 1;
+                  const movingStart = isSelected && movingCount > 1
+                    ? mergeFiles.findIndex(item => mergeSelectedIds.has(item.id)) + 1
+                    : idx + 1;
+                  const movingMaxStart = mergeFiles.length - movingCount + 1;
                   return (
                     <motion.li
                       key={f.id}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       draggable
+                      onClick={event => {
+                        const target = event.target as HTMLElement;
+                        if (target.closest('button, input, a')) return;
+                        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                          toggleMergeFileSelection(f.id, event.shiftKey);
+                        }
+                      }}
                       onDragStart={event => {
-                        setMergeSortingId(f.id);
+                        const movingIds = isSelected
+                          ? mergeFiles.filter(item => mergeSelectedIds.has(item.id)).map(item => item.id)
+                          : [f.id];
+                        setMergeDraggingIds(movingIds);
+                        if (!isSelected) {
+                          setMergeSelectedIds(new Set([f.id]));
+                          setMergeSelectionAnchorId(f.id);
+                        }
                         event.dataTransfer.effectAllowed = 'move';
                         event.dataTransfer.setData('text/plain', f.id);
                       }}
                       onDragOver={event => {
                         event.preventDefault();
+                        if (event.dataTransfer.files.length > 0 || Array.from(event.dataTransfer.types).includes('Files')) {
+                          event.dataTransfer.dropEffect = 'copy';
+                          setMergeDropTarget(null);
+                          return;
+                        }
                         event.dataTransfer.dropEffect = 'move';
-                        if (mergeSortingId && mergeSortingId !== f.id) {
+                        if (mergeDraggingIds.length > 0 && !mergeDraggingIds.includes(f.id)) {
                           setMergeDropTarget({ id: f.id, position: getDropInsertPosition(event) });
                         }
                       }}
@@ -1244,46 +1281,72 @@ export default function App() {
                       }}
                       onDrop={event => {
                         event.preventDefault();
+                        if (event.dataTransfer.files.length > 0) {
+                          addMergeFiles(event.dataTransfer.files);
+                          setMergeDraggingIds([]);
+                          setMergeDropTarget(null);
+                          return;
+                        }
                         const position = mergeDropTarget?.id === f.id ? mergeDropTarget.position : getDropInsertPosition(event);
-                        reorderMergeFile(mergeSortingId || event.dataTransfer.getData('text/plain'), f.id, position);
-                        setMergeSortingId(null);
+                        const fallbackId = event.dataTransfer.getData('text/plain');
+                        reorderMergeFiles(mergeDraggingIds.length > 0 ? mergeDraggingIds : [fallbackId], f.id, position);
+                        setMergeDraggingIds([]);
                         setMergeDropTarget(null);
                       }}
                       onDragEnd={() => {
-                        setMergeSortingId(null);
+                        setMergeDraggingIds([]);
                         setMergeDropTarget(null);
                       }}
                       className={cn(
                         'relative flex items-center px-4 py-3 gap-3 group transition-all duration-150 ease-out',
-                        mergeSortingId === f.id ? 'scale-[0.985] bg-slate-100/80 opacity-60' : 'hover:bg-slate-50/70',
-                        isDropTarget ? 'bg-slate-50 shadow-inner' : ''
+                        isDragging ? 'scale-[0.985] bg-selected opacity-60' : 'hover:bg-subtle',
+                        isSelected && !isDragging ? 'bg-compare-subtle/60 ring-1 ring-inset ring-focus/15' : '',
+                        isDropTarget ? 'bg-subtle shadow-inner' : ''
                       )}
                     >
                       {isDropTarget && (
                         <span
                           className={cn(
-                            'pointer-events-none absolute left-3 right-3 z-20 h-1 rounded-full bg-slate-950 shadow-[0_0_0_3px_rgba(15,23,42,0.10)]',
+                            'pointer-events-none absolute left-3 right-3 z-20 h-1 rounded-full bg-action shadow-[0_0_0_3px_rgba(15,23,42,0.10)]',
                             mergeDropTarget?.position === 'before' ? 'top-0 -translate-y-1/2' : 'bottom-0 translate-y-1/2'
                           )}
                         />
                       )}
-                      <span className="text-xs text-gray-300 w-5 text-right flex-shrink-0">{idx + 1}</span>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        draggable={false}
+                        aria-label={`${f.name} 선택`}
+                        className="size-4 shrink-0 accent-slate-950"
+                        onChange={() => {}}
+                        onClick={event => {
+                          event.stopPropagation();
+                          toggleMergeFileSelection(f.id, event.shiftKey);
+                        }}
+                        onDragStart={event => event.preventDefault()}
+                      />
+                      <EditableOrderNumber
+                        value={idx + 1}
+                        max={mergeFiles.length - movingCount + 1}
+                        itemLabel={movingCount > 1 ? `선택된 ${movingCount}개 파일` : f.name}
+                        onChange={position => moveMergeFilesToPosition(f.id, position)}
+                      />
                       <span className={cn(
                         'text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0',
                         isAi ? 'bg-orange-50 text-orange-500' : isPdf ? 'bg-blue-50 text-blue-500' : 'bg-emerald-50 text-emerald-600'
                       )}>{isAi ? 'AI' : isPdf ? 'PDF' : ext.toUpperCase()}</span>
-                      <span className="flex-1 text-sm text-gray-700 truncate">{f.name}</span>
-                      <span className="text-xs text-gray-300 font-mono flex-shrink-0">{formatSize(f.size)}</span>
+                      <span className="flex-1 truncate text-sm text-primary">{f.name}</span>
+                      <span className="flex-shrink-0 font-mono text-xs text-muted">{formatSize(f.size)}</span>
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => moveMergeFile(f.id, -1)}
-                          disabled={idx === 0}
+                          onClick={() => moveMergeFilesToPosition(f.id, movingStart - 1)}
+                          disabled={movingStart <= 1}
                           className={cn(
-                            'rounded-md border border-slate-200 p-1.5 transition',
-                            idx === 0
-                              ? 'cursor-not-allowed text-slate-200'
-                              : 'text-slate-400 hover:bg-white hover:text-slate-900'
+                            'rounded-md border border-border p-1.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                            movingStart <= 1
+                              ? 'cursor-not-allowed text-disabled-text opacity-50'
+                              : 'text-muted hover:bg-panel hover:text-primary'
                           )}
                           aria-label={`${f.name} 위로 이동`}
                           title="위로 이동"
@@ -1292,13 +1355,13 @@ export default function App() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => moveMergeFile(f.id, 1)}
-                          disabled={idx === mergeFiles.length - 1}
+                          onClick={() => moveMergeFilesToPosition(f.id, movingStart + 1)}
+                          disabled={movingStart >= movingMaxStart}
                           className={cn(
-                            'rounded-md border border-slate-200 p-1.5 transition',
-                            idx === mergeFiles.length - 1
-                              ? 'cursor-not-allowed text-slate-200'
-                              : 'text-slate-400 hover:bg-white hover:text-slate-900'
+                            'rounded-md border border-border p-1.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                            movingStart >= movingMaxStart
+                              ? 'cursor-not-allowed text-disabled-text opacity-50'
+                              : 'text-muted hover:bg-panel hover:text-primary'
                           )}
                           aria-label={`${f.name} 아래로 이동`}
                           title="아래로 이동"
@@ -1306,200 +1369,198 @@ export default function App() {
                           <ArrowDown className="h-3.5 w-3.5" />
                         </button>
                       </div>
-                      <button onClick={() => setMergeFiles(p => p.filter(x => x.id !== f.id))}
-                        className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 transition-all">
+                      <button onClick={() => removeMergeFile(f.id)}
+                        aria-label={`${f.name} 제거`}
+                        className="rounded-md p-1.5 text-muted opacity-0 transition-all hover:bg-danger-subtle hover:text-danger focus-visible:opacity-100 group-hover:opacity-100">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </motion.li>
                   );
                 })}
               </ul>
-            </div>
+              </PanelContent>
+            </Panel>
           )}
 
           {/* Output name + merge button */}
-          <div className="flex gap-2 items-center">
-            <div className="relative flex-1">
-              <input
-                type="text"
-                value={mergeOutputName}
-                onChange={e => setMergeOutputName(e.target.value)}
-                placeholder="출력 파일 이름"
-                className="w-full text-sm px-4 py-2.5 border border-slate-200 bg-white/90 rounded-xl focus:outline-none focus:border-slate-400 transition-colors pr-12 placeholder:text-slate-300 shadow-sm"
-              />
-              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-300 font-mono">.pdf</span>
-            </div>
-            <button
+          {mergeFiles.length > 0 && <Panel>
+            <PanelContent className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+              <div className="relative min-w-0">
+                <Field id="merge-output-name" label="출력 파일 이름">
+                  <input
+                    type="text"
+                    value={mergeOutputName}
+                    onChange={e => setMergeOutputName(e.target.value)}
+                    placeholder="출력 파일 이름"
+                    className={cn(fieldControlClassName, 'pr-12')}
+                  />
+                </Field>
+                <span className="pointer-events-none absolute right-3 bottom-2.5 font-mono text-xs text-muted">.pdf</span>
+              </div>
+              <Button
               onClick={runMerge}
               disabled={isMerging || mergeFiles.length < 2}
-              className={cn(
-                'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex-shrink-0',
-                isMerging || mergeFiles.length < 2
-                  ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
-                  : 'bg-slate-950 text-white hover:bg-slate-800 active:scale-[0.98]'
-              )}
-            >
-              {isMerging ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              {isMerging ? '병합 중…' : '병합'}
-            </button>
-          </div>
+                loading={isMerging}
+                loadingLabel="병합 중…"
+                startIcon={<Download className="size-4" />}
+              >
+                병합
+              </Button>
+            </PanelContent>
+          </Panel>}
         </div>
 
         {/* ════ TAB 2: SPLIT ════ */}
-        <div style={{ display: activeTab === 'split' ? 'flex' : 'none' }} className="flex-col gap-5 w-full flex animate-fadeIn">
-          <div>
-            <h2 className="text-lg font-black tracking-tight text-slate-950">PDF 분리</h2>
-            <p className="mt-1 text-xs font-semibold text-slate-400">여러 페이지 PDF를 페이지별 단일 PDF로 나눕니다.</p>
-          </div>
-
-          {!splitFile && (
-            <div
-              onDragOver={e => { e.preventDefault(); setSplitDragging(true); }}
-              onDragLeave={() => setSplitDragging(false)}
-              onDrop={handleSplitDrop}
-              onClick={() => splitInputRef.current?.click()}
-              className={cn(
-                'border rounded-2xl bg-white/85 flex flex-col items-center justify-center gap-2 py-10 cursor-pointer transition-all select-none shadow-sm',
-                splitDragging
-                  ? 'border-slate-400 bg-slate-50'
-                  : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
-              )}
-            >
-              <Upload className="w-5 h-5 text-gray-300" />
-              <p className="text-sm text-gray-400">PDF 파일을 드래그하거나 클릭하여 선택</p>
-              <p className="text-xs text-gray-300">.pdf</p>
-              <input
-                ref={splitInputRef}
-                type="file"
-                accept=".pdf,application/pdf"
-                className="hidden"
-                onChange={e => { if (e.target.files?.[0]) setSplitTarget(e.target.files[0]); }}
-              />
-            </div>
+        <div style={{ display: activeTab === 'split' ? 'flex' : 'none' }} className="flex w-full flex-col gap-6">
+          {!splitFile ? (
+            <FileWorkflowGate
+              title="PDF 분리"
+              description="여러 페이지 PDF를 페이지별 단일 PDF로 나눕니다."
+              featureIcon={<FileOutput className="size-5" />}
+              featureIconClassName="text-blue-500"
+              uploadTitle="분리할 PDF 파일을 드래그하거나 클릭하여 선택"
+              uploadDescription=".pdf"
+              accept=".pdf,application/pdf"
+              onFiles={files => {
+                const [file] = files;
+                if (file) setSplitTarget(file);
+              }}
+            />
+          ) : (
+            <PageHeader
+              title="PDF 분리"
+              description="여러 페이지 PDF를 페이지별 단일 PDF로 나눕니다."
+              icon={<FileOutput className="size-5" />}
+              iconClassName="text-blue-500"
+              actions={<NewWorkButton onConfirm={resetSplitWork} />}
+            />
           )}
 
           {splitFile && (
-            <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
-              className="border border-slate-200 rounded-2xl bg-white/90 p-4 flex items-center gap-3 animate-fadeIn shadow-sm">
+            <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}>
+              <Panel>
+                <PanelContent className="flex items-center gap-3">
               <div className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 bg-blue-50 text-blue-500">
                 PDF
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-800 truncate">{splitFile.name}</p>
-                <p className="text-xs text-gray-400 font-mono">{formatSize(splitFile.size)}</p>
+                <p className="truncate text-sm font-semibold text-primary">{splitFile.name}</p>
+                <p className="font-mono text-xs text-muted">{formatSize(splitFile.size)}</p>
               </div>
               <button
-                onClick={() => {
-                  setSplitFile(null);
-                  setSplitOutputName('');
-                  setSplitSuccess(null);
-                  setSplitError(null);
-                  setSplitDownloads([]);
-                  if (splitInputRef.current) splitInputRef.current.value = '';
-                }}
-                className="text-gray-300 hover:text-red-400 transition-colors"
+                onClick={resetSplitWork}
+                className="grid size-8 place-items-center rounded-control text-muted transition-colors hover:bg-danger-subtle hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                aria-label="파일 제거"
                 title="파일 제거"
               >
                 <X className="w-4 h-4" />
               </button>
+                </PanelContent>
+              </Panel>
             </motion.div>
           )}
 
           <AnimatePresence>
             {splitError && (
-              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                className="flex items-center gap-2 text-sm text-red-500 bg-red-50 border border-red-100 px-4 py-2.5 rounded-lg">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span className="flex-1">{splitError}</span>
-                <button onClick={() => setSplitError(null)}><X className="w-4 h-4" /></button>
+              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <Alert
+                  variant="danger"
+                  icon={<AlertCircle className="size-4" />}
+                  onDismiss={() => setSplitError(null)}
+                  dismissLabel="분리 오류 닫기"
+                >
+                  {splitError}
+                </Alert>
               </motion.div>
             )}
           </AnimatePresence>
 
           {splitFile && (
-            <div className="flex gap-2 items-center">
-              <div className="relative flex-1">
-                <input
-                  type="text"
-                  value={splitOutputName}
-                  onChange={e => setSplitOutputName(e.target.value)}
-                  placeholder="분리 파일 기본 이름"
-                  className="w-full text-sm px-4 py-2.5 border border-slate-200 bg-white/90 rounded-xl focus:outline-none focus:border-slate-400 transition-colors pr-32 placeholder:text-slate-300 shadow-sm"
-                />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-300 font-mono">_page_01.pdf</span>
-              </div>
-              <button
+            <Panel>
+              <PanelContent className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                <div className="relative min-w-0">
+                  <Field id="split-output-name" label="분리 파일 기본 이름">
+                    <input
+                      type="text"
+                      value={splitOutputName}
+                      onChange={e => setSplitOutputName(e.target.value)}
+                      placeholder="분리 파일 기본 이름"
+                      className={cn(fieldControlClassName, 'pr-32')}
+                    />
+                  </Field>
+                  <span className="pointer-events-none absolute right-3 bottom-2.5 font-mono text-xs text-muted">_page_01.pdf</span>
+                </div>
+                <Button
                 onClick={runSplit}
                 disabled={isSplitting}
-                className={cn(
-                  'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex-shrink-0',
-                  isSplitting
-                    ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
-                    : 'bg-slate-950 text-white hover:bg-slate-800 active:scale-[0.98]'
-                )}
-              >
-                {isSplitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileOutput className="w-4 h-4" />}
-                {isSplitting ? '분리 중…' : '분리 실행'}
-              </button>
-            </div>
+                  loading={isSplitting}
+                  loadingLabel="분리 중…"
+                  startIcon={<FileOutput className="size-4" />}
+                >
+                  분리 실행
+                </Button>
+              </PanelContent>
+            </Panel>
           )}
 
           <AnimatePresence>
             {splitSuccess && (
-              <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
-                className="border border-slate-200 rounded-2xl overflow-hidden bg-white/90 shadow-sm">
-                <div className="bg-slate-50/70 px-5 py-4 flex flex-wrap items-center gap-3 border-b border-slate-100">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+              <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}>
+                <Panel>
+                <PanelHeader className="flex flex-wrap items-center gap-3 bg-subtle">
+                  <CheckCircle2 className="size-4 flex-shrink-0 text-success" />
                   <div className="min-w-0 flex-1">
-                    <span className="text-sm font-semibold text-gray-800">분리 완료</span>
-                    <p className="mt-1 text-xs text-gray-400">{splitSuccess}</p>
+                    <span className="text-sm font-extrabold text-primary">분리 완료</span>
+                    <p className="mt-1 text-xs text-secondary">{splitSuccess}</p>
                   </div>
-                  <button
+                  <Button
+                    size="sm"
                     onClick={() => void downloadSplitZip()}
-                    className="flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
+                    startIcon={<Download className="size-3.5" />}
                   >
-                    <Download className="h-3.5 w-3.5" />
                     전체 ZIP 다운로드
-                  </button>
-                </div>
-                <div className="border-b border-slate-100 bg-white px-5 py-4">
+                  </Button>
+                </PanelHeader>
+                <PanelContent className="border-b border-border">
                   <div className="flex flex-wrap items-end gap-3">
                     <div className="min-w-[260px] flex-1">
-                      <label className="text-[11px] font-black text-slate-500">파일명 일괄 규칙</label>
-                      <div className="mt-2 flex items-center rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 focus-within:border-slate-400 focus-within:bg-white">
+                      <label htmlFor="split-name-rule" className="text-[13px] font-bold text-primary">파일명 일괄 규칙</label>
+                      <div className="mt-1.5 flex h-control-md items-center rounded-control border border-border-strong bg-panel px-3 transition focus-within:border-focus focus-within:ring-2 focus-within:ring-focus/20">
                         <input
+                          id="split-name-rule"
                           value={splitNameRule}
                           onChange={e => setSplitNameRule(e.target.value)}
                           onKeyDown={e => {
                             if (e.key === 'Enter') applySplitNameRule();
                           }}
-                          className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-slate-900 outline-none"
+                          className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-primary outline-none"
                           placeholder={DEFAULT_SPLIT_NAME_RULE}
                         />
-                        <span className="ml-2 flex-shrink-0 text-xs font-semibold text-slate-300">.pdf</span>
+                        <span className="ml-2 flex-shrink-0 text-xs font-semibold text-muted">.pdf</span>
                       </div>
                     </div>
-                    <button
+                    <Button
+                      variant="outline"
+                      size="md"
                       onClick={applySplitNameRule}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-50"
                     >
                       전체 적용
-                    </button>
+                    </Button>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-400">
-                    <span>예: <span className="font-mono text-slate-600">{splitRulePreview}</span></span>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-muted">
+                    <span>예: <span className="font-mono text-secondary">{splitRulePreview}</span></span>
                     <span className="font-mono">{'{name}'}</span>
                     <span className="font-mono">{'{page}'}</span>
                     <span className="font-mono">{'{page0}'}</span>
                     <span className="font-mono">{'{total}'}</span>
                   </div>
-                </div>
-                <div className="max-h-[320px] overflow-y-auto px-5 py-4 space-y-3">
+                </PanelContent>
+                <div className="max-h-[320px] space-y-3 overflow-y-auto p-panel">
                   {splitDownloads.map(item => (
-                    <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-100 bg-white px-3 py-3">
-                      <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
+                    <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-control border border-border bg-panel px-3 py-3">
+                      <ChevronRight className="size-3.5 flex-shrink-0 text-muted" />
                       <div className="min-w-0 flex-1">
-                        <div className="flex min-w-0 items-center rounded-lg border border-transparent bg-slate-50/70 px-2 py-1.5 transition focus-within:border-slate-200 focus-within:bg-white focus-within:shadow-sm">
+                        <div className="flex min-w-0 items-center rounded-control border border-transparent bg-subtle px-2 py-1.5 transition focus-within:border-focus focus-within:bg-panel focus-within:ring-2 focus-within:ring-focus/20">
                           <input
                             aria-label={`${item.label} 파일명`}
                             value={item.editableName ?? baseNameOfFile(item.fileName)}
@@ -1512,37 +1573,40 @@ export default function App() {
                                 e.currentTarget.blur();
                               }
                             }}
-                            className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-gray-900 outline-none"
+                            className="min-w-0 flex-1 bg-transparent text-xs font-semibold text-primary outline-none"
                           />
-                          <span className="ml-1 flex-shrink-0 text-xs font-semibold text-gray-300">.pdf</span>
+                          <span className="ml-1 flex-shrink-0 text-xs font-semibold text-muted">.pdf</span>
                         </div>
-                        <p className="mt-1 text-[11px] text-gray-400">{item.note}</p>
+                        <p className="mt-1 text-[11px] text-muted">{item.note}</p>
                       </div>
                       <span className="rounded bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-500">{item.label}</span>
-                      <button
+                      <Button
+                        variant="outline"
+                        size="sm"
                         onClick={() => downloadSplitItem(item)}
-                        className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 transition hover:bg-gray-50"
                       >
                         다운로드
-                      </button>
+                      </Button>
                     </div>
                   ))}
                 </div>
-                <div className="px-5 py-3 border-t border-gray-50 flex justify-end">
-                  <button
+                <PanelFooter className="flex justify-end py-3">
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => { setSplitSuccess(null); setSplitDownloads([]); }}
-                    className="text-xs text-gray-400 hover:text-gray-700 transition-colors font-medium"
                   >
                     닫기
-                  </button>
-                </div>
+                  </Button>
+                </PanelFooter>
+                </Panel>
               </motion.div>
             )}
           </AnimatePresence>
 
           {!splitSuccess && (
-            <div className="text-xs text-gray-400 leading-relaxed border-l-2 border-gray-100 pl-4">
-              <strong className="text-gray-500 font-medium">생성되는 파일</strong>
+            <div className="rounded-control border border-border bg-subtle px-4 py-3 text-[12px] leading-5 text-secondary">
+              <strong className="font-bold text-primary">생성되는 파일</strong>
               <div className="mt-1.5 space-y-0.5 font-mono">
                 <div>[이름]_page_01.pdf · [이름]_page_02.pdf · ...</div>
                 <div>전체 결과는 ZIP 파일로 한 번에 내려받을 수 있습니다.</div>
@@ -1552,43 +1616,36 @@ export default function App() {
         </div>
 
         {/* ════ TAB 3: OUTLINE ════ */}
-        <div style={{ display: activeTab === 'outline' ? 'flex' : 'none' }} className="flex-col gap-5 w-full flex animate-fadeIn">
-          <div>
-            <h2 className="text-lg font-black tracking-tight text-slate-950">인쇄용 변환</h2>
-            <p className="mt-1 text-xs font-semibold text-slate-400">글씨를 아웃라인화하여 4종 파일로 자동 패키징합니다.</p>
-          </div>
-
-          {/* Drop zone */}
-          {!outlineFile && (
-            <div
-              onDragOver={e => { e.preventDefault(); setOutlineDragging(true); }}
-              onDragLeave={() => setOutlineDragging(false)}
-              onDrop={handleOutlineDrop}
-              onClick={() => outlineInputRef.current?.click()}
-              className={cn(
-                'border rounded-2xl bg-white/85 flex flex-col items-center justify-center gap-2 py-10 cursor-pointer transition-all select-none shadow-sm',
-                outlineDragging
-                  ? 'border-slate-400 bg-slate-50'
-                  : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
-              )}
-            >
-              <Upload className="w-5 h-5 text-gray-300" />
-              <p className="text-sm text-gray-400">AI 또는 PDF 파일을 드래그하거나 클릭하여 선택</p>
-              <p className="text-xs text-gray-300">.ai · .pdf</p>
-              <input
-                ref={outlineInputRef}
-                type="file"
-                accept=".pdf,.ai"
-                className="hidden"
-                onChange={e => { if (e.target.files?.[0]) setOutlineTarget(e.target.files[0]); }}
-              />
-            </div>
+        <div style={{ display: activeTab === 'outline' ? 'flex' : 'none' }} className="flex w-full flex-col gap-6">
+          {!outlineFile && !outlineSuccess ? (
+            <FileWorkflowGate
+              title="인쇄용 변환"
+              description="글씨를 아웃라인화하여 4종 파일로 자동 패키징합니다."
+              featureIcon={<Printer className="size-5" />}
+              featureIconClassName="text-amber-500"
+              uploadTitle="AI 또는 PDF 파일을 드래그하거나 클릭하여 선택"
+              uploadDescription=".ai · .pdf"
+              accept=".pdf,.ai"
+              onFiles={files => {
+                const [file] = files;
+                if (file) setOutlineTarget(file);
+              }}
+            />
+          ) : (
+            <PageHeader
+              title="인쇄용 변환"
+              description="글씨를 아웃라인화하여 4종 파일로 자동 패키징합니다."
+              icon={<Printer className="size-5" />}
+              iconClassName="text-amber-500"
+              actions={<NewWorkButton onConfirm={resetOutlineWork} />}
+            />
           )}
 
           {/* Selected file card */}
           {outlineFile && !outlineSuccess && (
-            <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
-              className="border border-slate-200 rounded-2xl bg-white/90 p-4 flex items-center gap-3 animate-fadeIn shadow-sm">
+            <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}>
+              <Panel>
+                <PanelContent className="flex items-center gap-3">
               <div className={cn(
                 'text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0',
                 outlineFile.name.toLowerCase().endsWith('.ai') ? 'bg-orange-50 text-orange-500' : 'bg-blue-50 text-blue-500'
@@ -1596,24 +1653,31 @@ export default function App() {
                 {outlineFile.name.split('.').pop()?.toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-800 truncate">{outlineFile.name}</p>
-                <p className="text-xs text-gray-400 font-mono">{formatSize(outlineFile.size)}</p>
+                <p className="truncate text-sm font-semibold text-primary">{outlineFile.name}</p>
+                <p className="font-mono text-xs text-muted">{formatSize(outlineFile.size)}</p>
               </div>
               <button onClick={() => { setOutlineFile(null); setOutlineName(''); }}
-                className="text-gray-300 hover:text-red-400 transition-colors">
+                aria-label="파일 제거"
+                className="grid size-8 place-items-center rounded-control text-muted transition-colors hover:bg-danger-subtle hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus">
                 <X className="w-4 h-4" />
               </button>
+                </PanelContent>
+              </Panel>
             </motion.div>
           )}
 
           {/* Error */}
           <AnimatePresence>
             {outlineError && (
-              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                className="flex items-center gap-2 text-sm text-red-500 bg-red-50 border border-red-100 px-4 py-2.5 rounded-lg">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span className="flex-1">{outlineError}</span>
-                <button onClick={() => setOutlineError(null)}><X className="w-4 h-4" /></button>
+              <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+                <Alert
+                  variant="danger"
+                  icon={<AlertCircle className="size-4" />}
+                  onDismiss={() => setOutlineError(null)}
+                  dismissLabel="변환 오류 닫기"
+                >
+                  {outlineError}
+                </Alert>
               </motion.div>
             )}
           </AnimatePresence>
@@ -1621,94 +1685,95 @@ export default function App() {
           {/* Success card */}
           <AnimatePresence>
             {outlineSuccess && (
-              <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
-                className="border border-gray-100 rounded-xl overflow-hidden">
-                <div className="bg-gray-50/50 px-5 py-4 flex flex-wrap items-center gap-3 border-b border-gray-100">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+              <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}>
+                <Panel>
+                <PanelHeader className="flex flex-wrap items-center gap-3 bg-subtle">
+                  <CheckCircle2 className="size-4 flex-shrink-0 text-success" />
                   <div className="min-w-0 flex-1">
-                    <span className="text-sm font-semibold text-gray-800">변환 완료</span>
-                    <p className="mt-1 text-xs text-gray-400">{outlineSuccess}</p>
+                    <span className="text-sm font-extrabold text-primary">변환 완료</span>
+                    <p className="mt-1 text-xs text-secondary">{outlineSuccess}</p>
                   </div>
                   {outlineDownloads.length > 0 && (
-                    <button
+                    <Button
+                      size="sm"
                       onClick={() => void downloadOutlineZip()}
-                      className="flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
+                      startIcon={<Download className="size-3.5" />}
                     >
-                      <Download className="h-3.5 w-3.5" />
                       전체 ZIP 다운로드
-                    </button>
+                    </Button>
                   )}
-                </div>
-                <div className="px-5 py-4 space-y-3">
+                </PanelHeader>
+                <PanelContent className="space-y-3">
                   {outlineDownloads.length > 0 ? outlineDownloads.map(item => (
-                    <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-100 bg-white px-3 py-3">
-                      <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
+                    <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-control border border-border bg-panel px-3 py-3">
+                      <ChevronRight className="size-3.5 flex-shrink-0 text-muted" />
                       <div className="min-w-0 flex-1">
-                        <p className={cn('truncate text-xs font-semibold', item.emphasis ? 'text-gray-900' : 'text-gray-600')}>
+                        <p className={cn('truncate text-xs font-semibold', item.emphasis ? 'text-primary' : 'text-secondary')}>
                           {item.fileName}
                         </p>
-                        <p className="mt-1 text-[11px] text-gray-400">{item.note}</p>
+                        <p className="mt-1 text-[11px] text-muted">{item.note}</p>
                       </div>
                       {item.emphasis && (
                         <span className="rounded bg-orange-50 px-2 py-1 text-[10px] font-semibold text-orange-500">아웃라인</span>
                       )}
-                      <button
+                      <Button
+                        variant="outline"
+                        size="sm"
                         onClick={() => downloadOutlineItem(item)}
-                        className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 transition hover:bg-gray-50"
                       >
                         다운로드
-                      </button>
+                      </Button>
                     </div>
                   )) : (
-                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <div className="flex items-center gap-2 text-xs text-muted">
                       <FolderOpen className="w-3.5 h-3.5" />
                       <span className="font-mono truncate">{outlineSuccess}</span>
                     </div>
                   )}
-                  <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700">
+                  <div className="rounded-control border border-warning/20 bg-warning-subtle px-3 py-2 text-xs leading-relaxed text-warning">
                     인쇄용 AI는 Illustrator에서 대지 인식이 잘 되도록 페이지 박스를 유지한 PDF 기반 호환 파일입니다. 파일별 Illustrator 해석 차이가 있을 수 있으니 인쇄용 PDF와 함께 확인해주세요.
                   </div>
-                </div>
-                <div className="px-5 py-3 border-t border-gray-50 flex justify-end">
-                  <button onClick={() => { setOutlineSuccess(null); setOutlineDownloads([]); }}
-                    className="text-xs text-gray-400 hover:text-gray-700 transition-colors font-medium">
+                </PanelContent>
+                <PanelFooter className="flex justify-end py-3">
+                  <Button variant="ghost" size="sm" onClick={() => { setOutlineSuccess(null); setOutlineDownloads([]); }}>
                     닫기
-                  </button>
-                </div>
+                  </Button>
+                </PanelFooter>
+                </Panel>
               </motion.div>
             )}
           </AnimatePresence>
 
           {/* Filename + run button */}
           {outlineFile && !outlineSuccess && (
-            <div className="flex gap-2 items-center">
-              <input
-                type="text"
-                value={outlineName}
-                onChange={e => setOutlineName(e.target.value)}
-                placeholder="출력 파일 이름"
-                 className="flex-1 text-sm px-4 py-2.5 border border-slate-200 bg-white/90 rounded-xl focus:outline-none focus:border-slate-400 transition-colors placeholder:text-slate-300 shadow-sm"
-              />
-              <button
+            <Panel>
+              <PanelContent className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                <Field id="outline-output-name" label="출력 파일 이름">
+                  <input
+                    type="text"
+                    value={outlineName}
+                    onChange={e => setOutlineName(e.target.value)}
+                    placeholder="출력 파일 이름"
+                    className={fieldControlClassName}
+                  />
+                </Field>
+                <Button
                 onClick={runOutlining}
                 disabled={isOutlining}
-                className={cn(
-                  'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex-shrink-0',
-                  isOutlining
-                    ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
-                    : 'bg-slate-950 text-white hover:bg-slate-800 active:scale-[0.98]'
-                )}
-              >
-                {isOutlining ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                {isOutlining ? '변환 중…' : '4종 추출'}
-              </button>
-            </div>
+                  loading={isOutlining}
+                  loadingLabel="변환 중…"
+                  startIcon={<Download className="size-4" />}
+                >
+                  4종 추출
+                </Button>
+              </PanelContent>
+            </Panel>
           )}
 
           {/* Info box */}
           {!outlineSuccess && (
-            <div className="text-xs text-gray-400 leading-relaxed border-l-2 border-gray-100 pl-4">
-              <strong className="text-gray-500 font-medium">생성되는 파일</strong>
+            <div className="rounded-control border border-border bg-subtle px-4 py-3 text-[12px] leading-5 text-secondary">
+              <strong className="font-bold text-primary">생성되는 파일</strong>
               <div className="mt-1.5 space-y-0.5 font-mono">
                 <div>(원본)[이름].ai &nbsp;·&nbsp; (원본)[이름].pdf</div>
                 <div>(인쇄용)[이름].ai &nbsp;·&nbsp; (인쇄용)[이름].pdf</div>
@@ -1721,32 +1786,31 @@ export default function App() {
         {/* TAB 4: ILLUSTRATOR VIEWER */}
         <div
           style={{ display: activeTab === 'illustrator' ? 'flex' : 'none' }}
-          className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
+          className="w-full flex-1 min-h-0 min-w-0"
         >
-          <IllustratorViewerTab onGoHome={() => setActiveTab('home')} />
+          <IllustratorViewerTab />
         </div>
 
         <div
           style={{ display: activeTab === 'images' ? 'flex' : 'none' }}
-          className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
+          className="w-full flex-1 min-h-0 min-w-0"
         >
           <ImageToolkitTab initialMode={imageInitialMode} />
         </div>
 
         <div
           style={{ display: activeTab === 'gif' ? 'flex' : 'none' }}
-          className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
+          className="w-full flex-1 min-h-0 min-w-0"
         >
           <GifStudioTab />
         </div>
 
         <div 
           style={{ display: activeTab === 'compare' ? 'flex' : 'none' }} 
-          className="w-full flex-1 min-h-0 min-w-0 animate-fadeIn"
+          className="w-full flex-1 min-h-0 min-w-0"
         >
           <CompareTab results={compareResults} setRes={setCompareResults} onExpandChange={setCompareExpanded} />
         </div>
-      </main>
-    </div>
+    </AppShell>
   );
 }

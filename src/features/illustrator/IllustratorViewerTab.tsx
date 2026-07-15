@@ -6,12 +6,9 @@ import {
   Download,
   FileImage,
   Maximize2,
-  Upload,
   X,
   ZoomIn,
   ZoomOut,
-  Home,
-  FilePlus2,
   ChevronLeft,
   ChevronRight,
   Eye,
@@ -20,6 +17,9 @@ import {
   Type,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { WorkspaceToolbar } from '../../ui/shell/WorkspaceToolbar';
+import { FileWorkflowGate } from '../../ui/workflow/FileWorkflowGate';
+import { NewWorkButton } from '../../ui/workflow/NewWorkButton';
 
 type PreviewMode = 'pdf' | 'svg' | 'image' | 'psd';
 type RenderMode = 'native' | 'image';
@@ -50,10 +50,6 @@ type ViewerState = {
   pageCount: number;
   converted: boolean;
   psd?: PsdInfo;
-};
-
-type IllustratorViewerTabProps = {
-  onGoHome?: () => void;
 };
 
 const SUPPORTED_EXTENSIONS = ['ai', 'eps', 'svg', 'pdf', 'psd', 'psb'];
@@ -184,10 +180,8 @@ async function renderPdfPageToImage(url: string, pageNumber: number) {
   }
 }
 
-export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
+export function IllustratorViewerTab() {
   const previousUrlRef = useRef<string | null>(null);
-  const [dragging, setDragging] = useState(false);
   const [viewer, setViewer] = useState<ViewerState | null>(null);
   const [page, setPage] = useState(1);
   const [zoom, setZoom] = useState(100);
@@ -368,9 +362,19 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
     }
   };
 
-  const handleFiles = (files: FileList | null) => {
-    const file = files?.[0];
-    if (file) void openDirect(file);
+  const resetViewerWork = () => {
+    if (previousUrlRef.current) URL.revokeObjectURL(previousUrlRef.current);
+    previousUrlRef.current = null;
+    setViewer(null);
+    setPage(1);
+    setZoom(100);
+    setRenderMode('native');
+    setPdfImageUrl('');
+    setRenderingImage(false);
+    setPsdQuery('');
+    setActiveLayerId(null);
+    setLoading(false);
+    setError(null);
   };
 
   const downloadOriginal = () => {
@@ -411,33 +415,57 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
       }`
     : 'AI, EPS, SVG, PDF, PSD, PSB 파일을 열어 확대 검수';
 
+  if (!viewer) {
+    return (
+      <div className="flex h-full min-h-0 w-full flex-col overflow-y-auto bg-app">
+        <div className="mx-auto w-full max-w-[920px] px-6 py-8 md:px-8">
+          <FileWorkflowGate
+            title="뷰어"
+            description="AI, EPS, SVG, PDF, PSD, PSB 파일을 열어 확대 검수합니다."
+            featureIcon={<FileImage className="size-5" />}
+            featureIconClassName="text-emerald-500"
+            uploadTitle={loading ? '파일을 불러오는 중입니다' : '확인할 파일을 드래그하거나 클릭하여 선택'}
+            uploadDescription=".ai · .eps · .svg · .pdf · .psd · .psb"
+            actionLabel="파일 열기"
+            accept=".ai,.eps,.svg,.pdf,.psd,.psb"
+            disabled={loading}
+            onFiles={files => {
+              const [file] = files;
+              if (file) void openDirect(file);
+            }}
+          >
+            {error && (
+              <div role="alert" className="flex items-center gap-2 rounded-control border border-danger/20 bg-danger-subtle px-4 py-3 text-sm font-bold text-danger">
+                <AlertCircle className="size-4 shrink-0" />
+                <span className="flex-1">{error}</span>
+                <button type="button" onClick={() => setError(null)} aria-label="오류 닫기"><X className="size-4" /></button>
+              </div>
+            )}
+          </FileWorkflowGate>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[#fbfcfd] bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.08)_1px,transparent_0)] [background-size:22px_22px]">
-      <div className="flex min-h-14 flex-shrink-0 flex-wrap items-center gap-2 border-b border-slate-200/80 bg-white/90 px-4 py-2 backdrop-blur">
-        <button
-          onClick={onGoHome}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 transition hover:bg-slate-50"
-        >
-          <Home className="h-4 w-4" />
-          홈
-        </button>
-
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <div className="rounded-xl bg-slate-950 p-2 text-white shadow-sm">
-            <FileImage className="h-4 w-4" />
+      <WorkspaceToolbar aria-label="뷰어 작업 도구">
+        <div className="flex min-w-48 flex-1 items-center gap-2">
+          <div className="grid size-8 shrink-0 place-items-center text-emerald-500">
+            <FileImage className="size-5" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-black tracking-tight text-slate-950">
+            <p className="truncate text-sm font-extrabold tracking-tight text-primary">
               {viewer ? viewer.file.name : '뷰어'}
             </p>
-            <p className="truncate text-[11px] font-semibold text-slate-400">
+            <p className="truncate text-[11px] font-semibold text-muted">
               {viewerMeta}
             </p>
           </div>
         </div>
 
         {viewer && (
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-shrink-0 items-center gap-1.5">
             {viewer.pageCount > 1 && (
               <div className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-1">
                 <button
@@ -490,26 +518,10 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
               <Download className="h-4 w-4" />
               원본
             </button>
-            <button
-              onClick={() => inputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-600 transition hover:bg-slate-50"
-            >
-              <FilePlus2 className="h-4 w-4" />
-              새 파일
-            </button>
+            <NewWorkButton onConfirm={resetViewerWork} />
           </div>
         )}
-
-        {!viewer && (
-          <button
-            onClick={() => inputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-black text-white transition hover:bg-slate-700"
-          >
-            <Upload className="h-4 w-4" />
-            파일 열기
-          </button>
-        )}
-      </div>
+      </WorkspaceToolbar>
 
       <AnimatePresence>
         {error && (
@@ -526,28 +538,7 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
         )}
       </AnimatePresence>
 
-      {!viewer ? (
-        <div className="min-h-0 flex-1 p-4 sm:p-6">
-          <div
-            onDragOver={e => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={e => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
-            onClick={() => inputRef.current?.click()}
-            className={cn(
-              'flex h-full min-h-[420px] cursor-pointer select-none flex-col items-center justify-center gap-4 rounded-3xl border bg-white/85 transition-all shadow-sm',
-              dragging ? 'border-slate-500 bg-slate-50 shadow-lg' : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-white'
-            )}
-          >
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-5 text-slate-400 shadow-sm">
-              <Upload className="h-8 w-8" />
-            </div>
-            <div className="text-center">
-              <p className="text-base font-black text-slate-800">파일을 드래그하거나 클릭해서 열기</p>
-              <p className="mt-2 text-xs font-bold tracking-wide text-slate-400">.ai · .eps · .svg · .pdf · .psd · .psb</p>
-            </div>
-          </div>
-        </div>
-      ) : viewer.mode === 'psd' ? (
+      {viewer.mode === 'psd' ? (
         <div className="flex min-h-0 flex-1 bg-transparent">
           <aside className="flex w-80 flex-shrink-0 flex-col border-r border-slate-200 bg-white">
             <div className="border-b border-slate-200 p-3">
@@ -676,13 +667,6 @@ export function IllustratorViewerTab({ onGoHome }: IllustratorViewerTabProps) {
         </div>
       )}
 
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".ai,.eps,.svg,.pdf,.psd,.psb"
-        className="hidden"
-        onChange={e => handleFiles(e.target.files)}
-      />
     </div>
   );
 }

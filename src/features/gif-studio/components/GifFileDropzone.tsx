@@ -29,11 +29,11 @@ export function GifFileDropzone({ onFileSelected, hasSource }: GifFileDropzonePr
         selectFirstFile(event.dataTransfer.files);
       }}
       className={cn(
-        'rounded-2xl border border-dashed px-4 py-5 text-center transition-colors motion-reduce:transition-none',
-        isDragging ? 'border-pink-400 bg-pink-50' : 'border-slate-200 bg-slate-50/70',
+        'rounded-panel border border-dashed px-4 py-5 text-center transition-colors motion-reduce:transition-none',
+        isDragging ? 'border-gif bg-gif-subtle' : 'border-border bg-subtle',
       )}
     >
-      <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-pink-100 bg-white text-pink-500 shadow-sm">
+      <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-control border border-border bg-panel text-secondary shadow-panel">
         {hasSource ? <FileImage className="h-5 w-5" aria-hidden="true" /> : <Upload className="h-5 w-5" aria-hidden="true" />}
       </span>
       <p className="mt-3 text-sm font-black text-slate-800">{hasSource ? '다른 파일로 교체' : 'PNG · SVG · PSD · PDF · AI · EPS · HTML 불러오기'}</p>
@@ -53,7 +53,7 @@ export function GifFileDropzone({ onFileSelected, hasSource }: GifFileDropzonePr
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
-        className="mt-4 inline-flex min-h-9 items-center justify-center rounded-xl bg-slate-950 px-4 text-xs font-black text-white shadow-sm transition-colors hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2"
+        className="mt-4 inline-flex h-control-md items-center justify-center rounded-control bg-action px-4 text-xs font-extrabold text-on-action shadow-panel transition-colors hover:bg-action-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2"
       >
         파일 선택
       </button>

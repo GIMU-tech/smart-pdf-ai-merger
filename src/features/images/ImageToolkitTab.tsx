@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Download,
   Eye,
+  FilePlus2,
   ImageDown,
   Layers3,
   Loader2,
@@ -22,6 +23,13 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { moveSelectedItemsAroundTarget, moveSelectedItemsToPosition } from '../../lib/listOrder';
+import { StudioGrid } from '../../ui/layout/StudioGrid';
+import { UploadZone } from '../../ui/primitives/UploadZone';
+import { WorkspaceToolbar } from '../../ui/shell/WorkspaceToolbar';
+import { EditableOrderNumber } from '../../ui/workflow/EditableOrderNumber';
+import { FileWorkflowGate } from '../../ui/workflow/FileWorkflowGate';
+import { NewWorkButton } from '../../ui/workflow/NewWorkButton';
 import { runImageProcess, type ImageProcessFile } from './imageClient';
 import type { ImageToolMode, OutputFormat, SplitAxis, SplitStrategy, StitchDirection } from './types';
 
@@ -73,6 +81,13 @@ const imageOutputPattern = /\.(png|jpe?g|webp|avif|gif|bmp)$/i;
 const previewZoomStep = 25;
 const minPreviewZoom = 25;
 const maxPreviewZoom = 300;
+const fieldControlClassName =
+  'h-control-md w-full min-w-0 rounded-control border border-border-strong bg-panel px-3 text-sm text-primary outline-none transition-[border-color,box-shadow] duration-150 focus-visible:border-focus focus-visible:ring-2 focus-visible:ring-focus/20';
+const selectControlClassName = cn(fieldControlClassName, 'font-semibold');
+const monoControlClassName = cn(fieldControlClassName, 'font-mono text-xs');
+const fieldLabelClassName = 'grid gap-1 text-xs font-semibold text-secondary';
+const secondaryButtonClassName =
+  'inline-flex items-center justify-center rounded-control border border-border-strong bg-panel text-secondary transition-colors duration-150 hover:bg-subtle hover:text-primary';
 
 const outputFormatOptions: Array<{ value: OutputFormat; label: string }> = [
   { value: 'png', label: 'PNG' },
@@ -302,12 +317,13 @@ type ImageToolkitTabProps = {
 export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps) {
   const [activeMode, setActiveMode] = useState<ImageToolMode>(initialMode);
   const [filesByMode, setFilesByMode] = useState<FilesByMode>(() => createEmptyFilesByMode());
-  const [dragging, setDragging] = useState(false);
-  const [fileSortingId, setFileSortingId] = useState<string | null>(null);
+  const [fileDraggingIds, setFileDraggingIds] = useState<string[]>([]);
   const [fileDropTarget, setFileDropTarget] = useState<{ id: string; position: DropInsertPosition } | null>(null);
-  const [htmlDragging, setHtmlDragging] = useState(false);
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(() => new Set());
+  const [fileSelectionAnchorId, setFileSelectionAnchorId] = useState<string | null>(null);
   const [htmlText, setHtmlText] = useState('');
   const [htmlFile, setHtmlFile] = useState<File | null>(null);
+  const [htmlWorkspaceOpen, setHtmlWorkspaceOpen] = useState(false);
   const [htmlBaseUrl, setHtmlBaseUrl] = useState('');
   const [htmlCombinedWidth, setHtmlCombinedWidth] = useState(860);
   const [resizeWidth, setResizeWidth] = useState(860);
@@ -342,6 +358,12 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
   useEffect(() => {
     setActiveMode(initialMode);
   }, [initialMode]);
+  useEffect(() => {
+    setSelectedFileIds(new Set());
+    setFileSelectionAnchorId(null);
+    setFileDraggingIds([]);
+    setFileDropTarget(null);
+  }, [activeMode]);
   const files = activeUploadMode ? filesByMode[activeUploadMode] : [];
 
   const activeModeCopy = useMemo(
@@ -369,6 +391,12 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                   : '지정 픽셀 기준'
           }으로 나눕니다.`
         : activeModeCopy.description;
+  const activeFeatureIconClassName = {
+    resize: 'text-violet-500',
+    stitch: 'text-fuchsia-500',
+    split: 'text-orange-500',
+    html: 'text-cyan-500',
+  }[activeMode];
   const selectedOutputs = outputFiles.filter(file => file.selected);
   const parsedManualCuts = useMemo(() => parseManualCutValues(splitManualCuts), [splitManualCuts]);
   const splitFileNameSample = useMemo(
@@ -453,7 +481,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
     setPreviewOutputId('');
   };
 
-  const addFiles = async (fileList: FileList | null) => {
+  const addFiles = async (fileList: FileList | File[] | null) => {
     if (!fileList || !activeUploadMode) return;
 
     const nextFiles: PendingFile[] = [];
@@ -499,24 +527,12 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
       ...current,
       [activeUploadMode]: current[activeUploadMode].filter(item => item.id !== id),
     }));
-    resetOutputs();
-  };
-
-  const moveFile = (id: string, direction: -1 | 1) => {
-    if (!activeUploadMode) return;
-    setFilesByMode(current => {
-      const currentFiles = current[activeUploadMode];
-      const currentIndex = currentFiles.findIndex(item => item.id === id);
-      const nextIndex = currentIndex + direction;
-      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= currentFiles.length) return current;
-
-      const next = [...currentFiles];
-      [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
-      return {
-        ...current,
-        [activeUploadMode]: next,
-      };
+    setSelectedFileIds(current => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
     });
+    if (fileSelectionAnchorId === id) setFileSelectionAnchorId(null);
     resetOutputs();
   };
 
@@ -525,42 +541,61 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
     return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
   };
 
-  const reorderFile = (sourceId: string | null, targetId: string, position: DropInsertPosition = 'before') => {
-    if (!activeUploadMode || !sourceId || sourceId === targetId) return;
+  const toggleFileSelection = (id: string, selectRange = false) => {
+    if (selectRange && fileSelectionAnchorId) {
+      const anchorIndex = files.findIndex(item => item.id === fileSelectionAnchorId);
+      const targetIndex = files.findIndex(item => item.id === id);
+      if (anchorIndex >= 0 && targetIndex >= 0) {
+        const [start, end] = anchorIndex < targetIndex
+          ? [anchorIndex, targetIndex]
+          : [targetIndex, anchorIndex];
+        setSelectedFileIds(current => {
+          const next = new Set(current);
+          files.slice(start, end + 1).forEach(item => next.add(item.id));
+          return next;
+        });
+        return;
+      }
+    }
+
+    setSelectedFileIds(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setFileSelectionAnchorId(id);
+  };
+
+  const reorderFiles = (movingIds: string[], targetId: string, position: DropInsertPosition = 'before') => {
+    if (!activeUploadMode || movingIds.length === 0 || movingIds.includes(targetId)) return;
     setFilesByMode(current => {
       const currentFiles = current[activeUploadMode];
-      const sourceIndex = currentFiles.findIndex(item => item.id === sourceId);
-      const targetIndex = currentFiles.findIndex(item => item.id === targetId);
-      if (sourceIndex < 0 || targetIndex < 0) return current;
-
-      const next = [...currentFiles];
-      const [moved] = next.splice(sourceIndex, 1);
-      const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-      const insertIndex = position === 'after' ? adjustedTargetIndex + 1 : adjustedTargetIndex;
-      next.splice(insertIndex, 0, moved);
       return {
         ...current,
-        [activeUploadMode]: next,
+        [activeUploadMode]: moveSelectedItemsAroundTarget(currentFiles, movingIds, targetId, position, (item: PendingFile) => item.id),
       };
     });
     resetOutputs();
   };
 
-  const handleHtmlFileDrop = (event: DragEvent<HTMLElement>) => {
-    event.preventDefault();
-    setHtmlDragging(false);
-    const droppedFiles = Array.from(event.dataTransfer.files) as File[];
-    const file = droppedFiles.find(item => /\.(html?|txt)$/i.test(item.name) || item.type === 'text/html');
-    if (!file) {
-      setErrorMessage('HTML 파일만 드래그해서 업로드할 수 있습니다.');
-      return;
-    }
-    updateHtmlFile(file);
-  };
-
   const updateHtmlFile = (file: File | null) => {
     setHtmlFile(file);
+    if (file) setHtmlWorkspaceOpen(true);
     setErrorMessage(null);
+    resetOutputs();
+  };
+
+  const moveFilesToPosition = (id: string, position: number) => {
+    if (!activeUploadMode) return;
+    const movingIds = selectedFileIds.has(id) ? selectedFileIds : new Set([id]);
+    setFilesByMode(current => {
+      const currentFiles = current[activeUploadMode];
+      return {
+        ...current,
+        [activeUploadMode]: moveSelectedItemsToPosition(currentFiles, movingIds, position, (item: PendingFile) => item.id),
+      };
+    });
     resetOutputs();
   };
 
@@ -798,20 +833,146 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
     await downloadSelected();
   };
 
-  const clearAll = () => {
-    setFilesByMode(createEmptyFilesByMode());
-    setHtmlText('');
-    setHtmlFile(null);
+  const resetActiveWork = () => {
+    if (activeMode === 'html') {
+      setHtmlText('');
+      setHtmlFile(null);
+      setHtmlWorkspaceOpen(false);
+      if (htmlFileInputRef.current) htmlFileInputRef.current.value = '';
+    } else {
+      setFilesByMode(current => ({ ...current, [activeMode]: [] }));
+      if (inputRef.current) inputRef.current.value = '';
+    }
+    setSelectedFileIds(new Set());
+    setFileSelectionAnchorId(null);
+    setFileDraggingIds([]);
+    setFileDropTarget(null);
     setErrorMessage(null);
     setPreviewZoom(100);
     resetOutputs();
   };
 
+  const hasActiveWork = activeMode === 'html'
+    ? htmlWorkspaceOpen || Boolean(htmlFile || htmlText.trim())
+    : files.length > 0;
+
   return (
-    <div className="flex h-full w-full flex-col bg-[#fbfcfd] bg-[radial-gradient(circle_at_1px_1px,rgba(15,23,42,0.08)_1px,transparent_0)] [background-size:22px_22px]">
-      <div className="grid min-h-0 flex-1 gap-4 overflow-hidden px-4 py-4 sm:px-6 xl:grid-cols-[240px_minmax(650px,1fr)_300px]">
-        <aside className="min-h-0 overflow-y-auto">
-          <div className="rounded-2xl border border-slate-200 bg-white/90 p-2 shadow-sm">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col bg-app">
+      {!hasActiveWork ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-[920px] px-2 py-4 md:px-4 lg:px-8">
+            <FileWorkflowGate
+              title={activeTitle}
+              description={activeDescription}
+              featureIcon={<ActiveIcon className="size-5" />}
+              featureIconClassName={activeFeatureIconClassName}
+              uploadTitle={activeMode === 'html' ? 'HTML 파일을 드래그하거나 클릭하여 선택' : '이미지 파일을 드래그하거나 클릭하여 선택'}
+              uploadDescription={activeMode === 'html' ? '.html · .htm' : 'PNG · JPG · JPEG · WebP'}
+              actionLabel={activeMode === 'html' ? 'HTML 파일 선택' : '이미지 선택'}
+              accept={activeMode === 'html' ? '.html,.htm,text/html' : '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp'}
+              multiple={activeMode !== 'html'}
+              onFiles={selectedFiles => {
+                if (activeMode === 'html') updateHtmlFile(selectedFiles[0] || null);
+                else void addFiles(selectedFiles);
+              }}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-border bg-subtle p-3">
+              <div className="flex flex-wrap gap-2" role="navigation" aria-label="이미지 기능 선택">
+                {modes.map(mode => {
+                  const Icon = mode.icon;
+                  const selected = activeMode === mode.id;
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveMode(mode.id);
+                        setErrorMessage(null);
+                        resetOutputs();
+                      }}
+                      className={cn(
+                        'inline-flex h-control-sm items-center gap-2 rounded-control px-3 text-xs font-extrabold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                        selected ? 'bg-image text-white shadow-panel' : 'bg-panel text-secondary hover:text-primary',
+                      )}
+                    >
+                      <Icon className="size-4" />
+                      {mode.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {activeMode === 'html' && (
+                <button
+                  type="button"
+                  onClick={() => setHtmlWorkspaceOpen(true)}
+                  className={cn(secondaryButtonClassName, 'h-control-sm px-3 text-xs font-extrabold')}
+                >
+                  HTML 직접 붙여넣기
+                </button>
+              )}
+              </div>
+              {errorMessage && (
+                <div role="alert" className="flex items-center gap-2 rounded-control border border-danger/20 bg-danger-subtle px-4 py-3 text-sm font-semibold text-danger">
+                  <AlertCircle className="size-4 shrink-0" />
+                  <span className="flex-1">{errorMessage}</span>
+                  <button type="button" onClick={() => setErrorMessage(null)} aria-label="오류 닫기"><X className="size-4" /></button>
+                </div>
+              )}
+            </FileWorkflowGate>
+          </div>
+        </div>
+      ) : (
+        <>
+          <WorkspaceToolbar className="justify-between" aria-label={`${activeModeCopy.label} 작업 도구`}>
+            <div className="flex min-w-0 items-center gap-2">
+              <span className={cn('grid size-8 shrink-0 place-items-center', activeFeatureIconClassName)}>
+                <ActiveIcon className="size-5" />
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-extrabold text-primary">{activeTitle}</p>
+                <p className="truncate text-[11px] font-semibold text-muted">
+                  {activeMode === 'html' ? (htmlFile?.name || '직접 입력') : `${files.length}개 파일`}
+                </p>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {activeMode !== 'html' && (
+                <button
+                  type="button"
+                  onClick={() => inputRef.current?.click()}
+                  className={cn(secondaryButtonClassName, 'h-control-sm gap-2 px-3 text-xs font-extrabold')}
+                >
+                  <FilePlus2 className="size-4" />
+                  파일 추가
+                </button>
+              )}
+              <NewWorkButton onConfirm={resetActiveWork} />
+            </div>
+          </WorkspaceToolbar>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+            className="sr-only"
+            onChange={event => {
+              void addFiles(event.target.files);
+              event.currentTarget.value = '';
+            }}
+          />
+          <input
+            ref={htmlFileInputRef}
+            type="file"
+            accept=".html,.htm,text/html"
+            className="sr-only"
+            onChange={event => {
+              updateHtmlFile(event.target.files?.[0] || null);
+              event.currentTarget.value = '';
+            }}
+          />
+      <StudioGrid>
+        <aside className="min-h-0 min-w-0 overflow-visible xl:overflow-y-auto xl:overscroll-contain">
+          <div className="rounded-panel border border-border bg-panel-translucent p-2 shadow-panel">
             {modes.map(mode => {
               const Icon = mode.icon;
               const selected = activeMode === mode.id;
@@ -825,8 +986,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                     resetOutputs();
                   }}
                   className={cn(
-                    'flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition',
-                    selected ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-950'
+                    'flex w-full items-center gap-3 rounded-control px-3 py-3 text-left transition-colors duration-150',
+                    selected
+                      ? 'bg-image text-white shadow-panel'
+                      : 'text-secondary hover:bg-image-subtle hover:text-primary'
                   )}
                 >
                   <Icon className="h-4 w-4 flex-shrink-0" />
@@ -838,28 +1001,28 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
             })}
           </div>
 
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
-            <div className="mb-3 flex items-center gap-2 text-xs font-black text-slate-900">
-              <ActiveIcon className="h-4 w-4" />
+          <div className="mt-4 rounded-panel border border-border bg-panel-translucent p-panel shadow-panel">
+            <div className="mb-3 flex items-center gap-2 text-xs font-extrabold text-primary">
+              <ActiveIcon className="h-4 w-4 text-image" />
               옵션
             </div>
             <div className="grid gap-3">
               {activeMode === 'resize' && (
                 <>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     기준 폭
                     <input
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                       type="number"
                       min={1}
                       value={resizeWidth}
                       onChange={event => setResizeWidth(Number(event.target.value))}
                     />
                   </label>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     출력 포맷
                     <select
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-gray-400"
+                      className={selectControlClassName}
                       value={outputFormat}
                       onChange={event => {
                         setOutputFormat(event.target.value as OutputFormat);
@@ -875,10 +1038,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
               )}
               {activeMode === 'stitch' && (
                 <>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     방향
                     <select
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-gray-400"
+                      className={selectControlClassName}
                       value={stitchDirection}
                       onChange={event => {
                         setStitchDirection(event.target.value as StitchDirection);
@@ -889,20 +1052,20 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                       <option value="horizontal">가로</option>
                     </select>
                   </label>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     {stitchDirection === 'vertical' ? '기준 폭' : '기준 높이'}
                     <input
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                       type="number"
                       min={1}
                       value={stitchWidth}
                       onChange={event => setStitchWidth(Number(event.target.value))}
                     />
                   </label>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     출력 포맷
                     <select
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-gray-400"
+                      className={selectControlClassName}
                       value={outputFormat}
                       onChange={event => {
                         setOutputFormat(event.target.value as OutputFormat);
@@ -918,10 +1081,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
               )}
               {activeMode === 'split' && (
                 <>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     자르기 방식
                     <select
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-gray-400"
+                      className={selectControlClassName}
                       value={splitStrategy}
                       onChange={event => {
                         setSplitStrategy(event.target.value as SplitStrategy);
@@ -934,10 +1097,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                       <option value="manual">수동 절단선</option>
                     </select>
                   </label>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     기준 축
                     <select
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-gray-400"
+                      className={selectControlClassName}
                       value={splitAxis}
                       onChange={event => {
                         setSplitAxis(event.target.value as SplitAxis);
@@ -948,10 +1111,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                       <option value="horizontal">가로</option>
                     </select>
                   </label>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     {splitAxis === 'vertical' ? '최대 높이(px)' : '최대 폭(px)'}
                     <input
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                       type="number"
                       min={100}
                       value={splitMaxPixels}
@@ -959,10 +1122,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                     />
                   </label>
                   {splitStrategy === 'manual' ? (
-                    <label className="grid gap-1 border-t border-gray-100 pt-3 text-xs font-semibold text-gray-500">
+                    <label className={cn(fieldLabelClassName, 'border-t border-border pt-3')}>
                       수동 절단선(px)
                       <textarea
-                        className="min-h-20 w-full min-w-0 resize-y rounded-md border border-gray-200 px-3 py-2 font-mono text-xs leading-5 text-gray-800 outline-none focus:border-gray-400"
+                        className={cn(monoControlClassName, 'min-h-20 resize-y py-2 leading-5')}
                         value={splitManualCuts}
                         onChange={event => {
                           setSplitManualCuts(event.target.value);
@@ -976,10 +1139,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                     </label>
                   ) : (
                     <div className="grid gap-3 border-t border-gray-100 pt-3">
-                      <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                      <label className={fieldLabelClassName}>
                         겹침(px)
                         <input
-                          className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                           type="number"
                           min={0}
                           value={splitOverlap}
@@ -989,10 +1152,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                           }}
                         />
                       </label>
-                      <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                      <label className={fieldLabelClassName}>
                         마지막 조각 최소(px)
                         <input
-                          className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                           type="number"
                           min={0}
                           value={splitMinLastChunkPixels}
@@ -1003,10 +1166,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                         />
                       </label>
                       {(splitStrategy === 'flow' || splitStrategy === 'ai-flow') && (
-                        <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                        <label className={fieldLabelClassName}>
                           {splitStrategy === 'ai-flow' ? 'AI 탐색 범위(px)' : '흐름 탐색 범위(px)'}
                           <input
-                            className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                             type="number"
                             min={80}
                             value={splitSearchWindow}
@@ -1025,10 +1188,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                     </div>
                   )}
                   <div className="grid gap-3 border-t border-gray-100 pt-3">
-                    <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                    <label className={fieldLabelClassName}>
                       파일명 규칙
                       <input
-                        className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 font-mono text-xs text-gray-800 outline-none focus:border-gray-400"
+                        className={monoControlClassName}
                         value={splitNameTemplate}
                         onChange={event => {
                           setSplitNameTemplate(event.target.value);
@@ -1037,10 +1200,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                       />
                     </label>
                     <div className="grid grid-cols-2 gap-2">
-                      <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                      <label className={fieldLabelClassName}>
                         시작 번호
                         <input
-                          className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                           type="number"
                           min={1}
                           value={splitNameStartIndex}
@@ -1050,10 +1213,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                           }}
                         />
                       </label>
-                      <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                      <label className={fieldLabelClassName}>
                         번호 자릿수
                         <input
-                          className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                           type="number"
                           min={1}
                           max={8}
@@ -1070,17 +1233,17 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                     </p>
                   </div>
                   <div className="grid gap-3 border-t border-gray-100 pt-3">
-                    <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                    <label className={fieldLabelClassName}>
                       대지 섹션 간격(px)
                       <input
-                        className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                         type="number"
                         min={0}
                         value={splitPreviewGap}
                         onChange={event => setSplitPreviewGap(Number(event.target.value))}
                       />
                     </label>
-                    <label className="flex items-center gap-2 text-xs font-semibold text-gray-500">
+                    <label className="flex items-center gap-2 text-xs font-semibold text-secondary">
                       <input
                         type="checkbox"
                         checked={splitShowSectionLabels}
@@ -1090,10 +1253,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                       섹션명과 가로세로 표시
                     </label>
                   </div>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     출력 포맷
                     <select
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-gray-400"
+                      className={selectControlClassName}
                       value={outputFormat}
                       onChange={event => {
                         setOutputFormat(event.target.value as OutputFormat);
@@ -1109,29 +1272,29 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
               )}
               {activeMode === 'html' && (
                 <>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     baseUrl
                     <input
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                       value={htmlBaseUrl}
                       onChange={event => setHtmlBaseUrl(event.target.value)}
                       placeholder="https://example.com/"
                     />
                   </label>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     통이미지 폭
                     <input
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none focus:border-gray-400"
+                      className={fieldControlClassName}
                       type="number"
                       min={1}
                       value={htmlCombinedWidth}
                       onChange={event => setHtmlCombinedWidth(Number(event.target.value))}
                     />
                   </label>
-                  <label className="grid gap-1 text-xs font-semibold text-gray-500">
+                  <label className={fieldLabelClassName}>
                     출력 포맷
                     <select
-                      className="w-full min-w-0 rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-gray-400"
+                      className={selectControlClassName}
                       value={outputFormat}
                       onChange={event => {
                         setOutputFormat(event.target.value as OutputFormat);
@@ -1149,25 +1312,25 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
           </div>
         </aside>
 
-        <main className="min-h-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 shadow-sm">
+        <main className="min-h-0 min-w-0 overflow-visible rounded-panel border border-border bg-panel-translucent shadow-panel xl:overflow-y-auto xl:overscroll-contain">
           <div className="grid min-h-full gap-4 p-5 2xl:grid-cols-[minmax(320px,0.78fr)_minmax(560px,1.55fr)] 2xl:grid-rows-[auto_auto_1fr] 2xl:items-start">
               <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 2xl:col-start-1 2xl:row-start-1">
                 <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <ActiveIcon className="h-4 w-4 text-slate-900" />
-                  <h3 className="text-base font-black tracking-tight text-slate-950">{activeTitle}</h3>
+                  <ActiveIcon className="h-4 w-4 text-image" />
+                  <h3 className="text-base font-extrabold tracking-tight text-primary">{activeTitle}</h3>
                 </div>
-                <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">{activeDescription}</p>
+                <p className="mt-2 text-xs font-semibold leading-5 text-secondary">{activeDescription}</p>
                 </div>
               <button
                 type="button"
                 onClick={() => void runActiveMode()}
                 disabled={processing || Boolean(validateBeforeRun())}
                 className={cn(
-                  'inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 text-xs font-black transition',
+                  'inline-flex h-control-md shrink-0 items-center gap-2 rounded-control border px-4 text-xs font-extrabold transition-colors duration-150',
                   processing || Boolean(validateBeforeRun())
-                    ? 'cursor-not-allowed bg-slate-100 text-slate-300'
-                    : 'bg-slate-950 text-white hover:bg-slate-800'
+                    ? 'cursor-not-allowed border-disabled-border bg-disabled text-disabled-text'
+                    : 'border-action bg-action text-on-action hover:border-action-hover hover:bg-action-hover'
                 )}
               >
                 {processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
@@ -1193,55 +1356,18 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
             )}
 
             {statusMessage && (
-              <div className="rounded-md border border-gray-100 bg-gray-50 px-4 py-3 text-sm font-semibold text-gray-600 2xl:col-start-1 2xl:row-start-2">
+              <div className="rounded-control border border-border bg-subtle px-4 py-3 text-sm font-semibold text-secondary 2xl:col-start-1 2xl:row-start-2">
                 {statusMessage}
               </div>
             )}
 
-            {activeMode === 'html' ? (
+            {activeMode === 'html' && (
               <section
                 className={cn(
                   'grid gap-3 2xl:col-start-1',
                   errorMessage || statusMessage ? '2xl:row-start-3' : '2xl:row-start-2'
                 )}
               >
-                <div
-                  onDragOver={event => {
-                    event.preventDefault();
-                    setHtmlDragging(true);
-                  }}
-                  onDragLeave={() => setHtmlDragging(false)}
-                  onDrop={handleHtmlFileDrop}
-                  className={cn(
-                    'flex flex-wrap gap-2 rounded-md border p-2 transition',
-                    htmlDragging ? 'border-gray-400 bg-gray-50' : 'border-transparent'
-                  )}
-                >
-                  <button
-                    type="button"
-                    onClick={() => htmlFileInputRef.current?.click()}
-                    className="inline-flex items-center gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
-                  >
-                    <Upload className="h-4 w-4" />
-                    HTML 파일 선택
-                  </button>
-                  <input
-                    ref={htmlFileInputRef}
-                    type="file"
-                    accept=".html,.htm,text/html"
-                    className="hidden"
-                    onChange={event => updateHtmlFile(event.target.files?.[0] || null)}
-                  />
-                  {htmlFile && (
-                    <button
-                      type="button"
-                      onClick={() => updateHtmlFile(null)}
-                      className="rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-500 transition hover:bg-gray-50 hover:text-red-500"
-                    >
-                      HTML 파일 제거
-                    </button>
-                  )}
-                </div>
                 {htmlFile && (
                   <div className="rounded-md border border-gray-100 bg-gray-50 px-4 py-3">
                     <p className="truncate text-sm font-semibold text-gray-800">{htmlFile.name}</p>
@@ -1255,49 +1381,18 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                     resetOutputs();
                   }}
                   placeholder="<img src=&quot;https://example.com/image.jpg&quot;>"
-                  className="min-h-32 max-h-44 resize-y rounded-md border border-gray-200 px-4 py-3 font-mono text-xs leading-6 text-gray-700 outline-none transition placeholder:text-gray-300 focus:border-gray-400"
+                  className={cn(monoControlClassName, 'min-h-32 max-h-44 resize-y px-4 py-3 leading-6 placeholder:text-muted')}
                 />
               </section>
-            ) : (
-              <div
-                onDragOver={event => {
-                  event.preventDefault();
-                  setDragging(true);
-                }}
-                onDragLeave={() => setDragging(false)}
-                onDrop={event => {
-                  event.preventDefault();
-                  setDragging(false);
-                  void addFiles(event.dataTransfer.files);
-                }}
-                onClick={() => inputRef.current?.click()}
-                className={cn(
-                  'flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-md border py-5 text-center transition 2xl:col-start-1',
-                  errorMessage || statusMessage ? '2xl:row-start-3' : '2xl:row-start-2',
-                  dragging ? 'border-gray-400 bg-gray-50' : 'border-dashed border-gray-200 hover:border-gray-300 hover:bg-gray-50/60'
-                )}
-              >
-                <ImageDown className="h-5 w-5 text-gray-300" />
-                <p className="text-sm font-semibold text-gray-500">이미지 파일을 드래그하거나 클릭하여 추가</p>
-                <p className="text-xs font-medium text-gray-300">PNG · JPG · JPEG · WebP</p>
-                <input
-                  ref={inputRef}
-                  type="file"
-                  multiple
-                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                  className="hidden"
-                  onChange={event => void addFiles(event.target.files)}
-                />
-              </div>
             )}
 
-            <section className="flex h-[660px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-100/80 2xl:col-start-2 2xl:row-start-1 2xl:row-span-4 2xl:h-full 2xl:min-h-[calc(100vh-9rem)] 2xl:self-stretch">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white/90 px-4 py-3">
+            <section className="flex h-[660px] min-w-0 flex-col overflow-hidden rounded-panel border border-border bg-subtle 2xl:col-start-2 2xl:row-start-1 2xl:row-span-4 2xl:h-full 2xl:min-h-[calc(100vh-9rem)] 2xl:self-stretch">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-panel-translucent px-4 py-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <Eye className="h-4 w-4 text-slate-500" />
-                    <p className="text-xs font-black text-slate-900">결과 미리보기</p>
-                    <span className="rounded bg-gray-100 px-2 py-0.5 text-[11px] font-bold text-gray-500">
+                    <Eye className="h-4 w-4 text-image" />
+                    <p className="text-xs font-extrabold text-primary">결과 미리보기</p>
+                    <span className="rounded-control bg-selected px-2 py-0.5 text-[11px] font-bold text-secondary">
                       {previewableOutputFiles.length}개
                     </span>
                   </div>
@@ -1510,7 +1605,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
             <section
               className={cn(
                 'rounded-md border border-gray-100 2xl:col-start-1',
-                errorMessage || statusMessage ? '2xl:row-start-4' : '2xl:row-start-3'
+                errorMessage || statusMessage ? '2xl:row-start-3' : '2xl:row-start-2'
               )}
             >
               <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
@@ -1523,25 +1618,71 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                         ? `${files.length}개 이미지 · 이 순서대로 위에서 아래로 이어붙입니다.`
                         : `${files.length}개 이미지`}
                   </p>
+                  {activeMode !== 'html' && files.length > 0 && (
+                    <div className="mt-1 flex items-center gap-2">
+                      <p className="text-[11px] font-medium text-muted">순번을 더블클릭하면 원하는 위치로 이동합니다.</p>
+                      {selectedFileIds.size > 0 && (
+                        <span className="rounded-control bg-selected px-2 py-0.5 text-[10px] font-bold text-primary">
+                          {selectedFileIds.size}개 선택
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 {files.length > 0 && activeMode !== 'html' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (activeUploadMode) {
-                        setFilesByMode(current => ({
-                          ...current,
-                          [activeUploadMode]: [],
-                        }));
-                      }
-                      resetOutputs();
-                    }}
-                    className="text-xs font-semibold text-gray-400 transition hover:text-red-500"
-                  >
-                    전체 제거
-                  </button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedFileIds.size === files.length) {
+                          setSelectedFileIds(new Set());
+                          setFileSelectionAnchorId(null);
+                        } else {
+                          setSelectedFileIds(new Set(files.map(item => item.id)));
+                          setFileSelectionAnchorId(files[0]?.id || null);
+                        }
+                      }}
+                      className="text-xs font-semibold text-secondary transition hover:text-primary"
+                    >
+                      {selectedFileIds.size === files.length ? '선택 해제' : '전체 선택'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (activeUploadMode) {
+                          setFilesByMode(current => ({
+                            ...current,
+                            [activeUploadMode]: [],
+                          }));
+                        }
+                        setSelectedFileIds(new Set());
+                        setFileSelectionAnchorId(null);
+                        setFileDraggingIds([]);
+                        setFileDropTarget(null);
+                        resetOutputs();
+                      }}
+                      className="text-xs font-semibold text-gray-400 transition hover:text-red-500"
+                    >
+                      전체 제거
+                    </button>
+                  </div>
                 )}
               </div>
+
+              {(activeMode === 'resize' || activeMode === 'stitch') && (
+                <div className="px-4 pt-4">
+                  <UploadZone
+                    className="min-h-[116px] gap-2 bg-subtle p-3"
+                    size="compact"
+                    title="이미지를 더 추가하세요"
+                    description="여러 파일을 한 번에 선택하거나 드래그할 수 있습니다."
+                    actionLabel="파일 추가"
+                    accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                    multiple
+                    onFiles={selectedFiles => void addFiles(selectedFiles)}
+                  />
+                </div>
+              )}
 
               {activeMode === 'html' ? (
                 <div className="px-4 py-6 text-sm font-medium text-gray-400">
@@ -1550,20 +1691,46 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
               ) : files.length > 0 ? (
                 <ul className="max-h-[440px] divide-y divide-gray-100 overflow-y-auto">
                   {files.map((item, index) => {
-                    const isDropTarget = fileDropTarget?.id === item.id && fileSortingId !== item.id;
+                    const isSelected = selectedFileIds.has(item.id);
+                    const isDragging = fileDraggingIds.includes(item.id);
+                    const isDropTarget = fileDropTarget?.id === item.id && !isDragging;
+                    const movingCount = isSelected ? selectedFileIds.size : 1;
+                    const movingStart = isSelected && movingCount > 1
+                      ? files.findIndex(file => selectedFileIds.has(file.id)) + 1
+                      : index + 1;
+                    const movingMaxStart = files.length - movingCount + 1;
                     return (
                     <li
                       key={item.id}
                       draggable
+                      onClick={event => {
+                        const target = event.target as HTMLElement;
+                        if (target.closest('button, input, a')) return;
+                        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                          toggleFileSelection(item.id, event.shiftKey);
+                        }
+                      }}
                       onDragStart={event => {
-                        setFileSortingId(item.id);
+                        const movingIds = isSelected
+                          ? files.filter(file => selectedFileIds.has(file.id)).map(file => file.id)
+                          : [item.id];
+                        setFileDraggingIds(movingIds);
+                        if (!isSelected) {
+                          setSelectedFileIds(new Set([item.id]));
+                          setFileSelectionAnchorId(item.id);
+                        }
                         event.dataTransfer.effectAllowed = 'move';
                         event.dataTransfer.setData('text/plain', item.id);
                       }}
                       onDragOver={event => {
                         event.preventDefault();
+                        if (event.dataTransfer.files.length > 0 || Array.from(event.dataTransfer.types).includes('Files')) {
+                          event.dataTransfer.dropEffect = 'copy';
+                          setFileDropTarget(null);
+                          return;
+                        }
                         event.dataTransfer.dropEffect = 'move';
-                        if (fileSortingId && fileSortingId !== item.id) {
+                        if (fileDraggingIds.length > 0 && !fileDraggingIds.includes(item.id)) {
                           setFileDropTarget({ id: item.id, position: getDropInsertPosition(event) });
                         }
                       }}
@@ -1574,18 +1741,26 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                       }}
                       onDrop={event => {
                         event.preventDefault();
+                        if (event.dataTransfer.files.length > 0) {
+                          void addFiles(event.dataTransfer.files);
+                          setFileDraggingIds([]);
+                          setFileDropTarget(null);
+                          return;
+                        }
                         const position = fileDropTarget?.id === item.id ? fileDropTarget.position : getDropInsertPosition(event);
-                        reorderFile(fileSortingId || event.dataTransfer.getData('text/plain'), item.id, position);
-                        setFileSortingId(null);
+                        const fallbackId = event.dataTransfer.getData('text/plain');
+                        reorderFiles(fileDraggingIds.length > 0 ? fileDraggingIds : [fallbackId], item.id, position);
+                        setFileDraggingIds([]);
                         setFileDropTarget(null);
                       }}
                       onDragEnd={() => {
-                        setFileSortingId(null);
+                        setFileDraggingIds([]);
                         setFileDropTarget(null);
                       }}
                       className={cn(
-                        'relative grid grid-cols-[26px_52px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-all duration-150 ease-out',
-                        fileSortingId === item.id ? 'scale-[0.985] bg-slate-100/80 opacity-60' : 'hover:bg-slate-50/70',
+                        'relative grid grid-cols-[28px_36px_52px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-all duration-150 ease-out',
+                        isDragging ? 'scale-[0.985] bg-slate-100/80 opacity-60' : 'hover:bg-slate-50/70',
+                        isSelected && !isDragging ? 'bg-violet-50/60 ring-1 ring-inset ring-violet-200/70' : '',
                         isDropTarget ? 'bg-slate-50 shadow-inner' : ''
                       )}
                     >
@@ -1597,7 +1772,26 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                           )}
                         />
                       )}
-                      <span className="text-xs font-mono text-gray-300">{index + 1}</span>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        draggable={false}
+                        aria-label={`${item.file.name} 선택`}
+                        className="size-4 accent-violet-600"
+                        onChange={() => {}}
+                        onClick={event => {
+                          event.stopPropagation();
+                          toggleFileSelection(item.id, event.shiftKey);
+                        }}
+                        onDragStart={event => event.preventDefault()}
+                      />
+                      <EditableOrderNumber
+                        value={index + 1}
+                        max={files.length - movingCount + 1}
+                        itemLabel={movingCount > 1 ? `선택된 ${movingCount}개 파일` : item.file.name}
+                        className="w-9"
+                        onChange={position => moveFilesToPosition(item.id, position)}
+                      />
                       <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-md border border-gray-100 bg-gray-50 p-1">
                         <PreviewImage source={item.file} alt={item.file.name} />
                       </div>
@@ -1621,12 +1815,12 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                           <>
                             <button
                               type="button"
-                              onClick={() => moveFile(item.id, -1)}
-                              disabled={index === 0}
+                              onClick={() => moveFilesToPosition(item.id, movingStart - 1)}
+                              disabled={movingStart <= 1}
                               title="위로 이동"
                               className={cn(
                                 'rounded-md border border-gray-200 p-1.5 transition',
-                                index === 0
+                                movingStart <= 1
                                   ? 'cursor-not-allowed text-gray-200'
                                   : 'text-gray-400 hover:bg-gray-50 hover:text-gray-900'
                               )}
@@ -1636,12 +1830,12 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                             </button>
                             <button
                               type="button"
-                              onClick={() => moveFile(item.id, 1)}
-                              disabled={index === files.length - 1}
+                              onClick={() => moveFilesToPosition(item.id, movingStart + 1)}
+                              disabled={movingStart >= movingMaxStart}
                               title="아래로 이동"
                               className={cn(
                                 'rounded-md border border-gray-200 p-1.5 transition',
-                                index === files.length - 1
+                                movingStart >= movingMaxStart
                                   ? 'cursor-not-allowed text-gray-200'
                                   : 'text-gray-400 hover:bg-gray-50 hover:text-gray-900'
                               )}
@@ -1674,12 +1868,12 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
           </div>
         </main>
 
-          <aside className="min-h-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 shadow-sm">
-          <div className="border-b border-gray-100 px-5 py-4">
+          <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-panel border border-border bg-panel-translucent shadow-panel max-xl:h-[min(720px,75vh)] max-xl:min-h-[420px]">
+          <div className="shrink-0 border-b border-border px-5 py-4">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs font-black text-slate-900">수정한 파일 목록</p>
-                <p className="mt-1 text-xs font-medium text-gray-400">
+                <p className="text-xs font-extrabold text-primary">수정한 파일 목록</p>
+                <p className="mt-1 text-xs font-medium text-muted">
                   결과를 확인한 뒤 필요한 파일만 다운로드합니다.
                 </p>
               </div>
@@ -1691,7 +1885,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
             </div>
           </div>
 
-          <div className="grid gap-4 p-5">
+          <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto overscroll-contain p-5">
             {outputLocation && (
               <div className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-3 text-xs font-semibold leading-5 text-emerald-700">
                 {outputLocation}
@@ -1704,14 +1898,14 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                   <button
                     type="button"
                     onClick={() => setAllOutputsSelected(true)}
-                    className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 transition hover:bg-gray-50"
+                    className={cn(secondaryButtonClassName, 'h-control-sm px-3 text-xs font-semibold')}
                   >
                     전체 선택
                   </button>
                   <button
                     type="button"
                     onClick={() => setAllOutputsSelected(false)}
-                    className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 transition hover:bg-gray-50"
+                    className={cn(secondaryButtonClassName, 'h-control-sm px-3 text-xs font-semibold')}
                   >
                     선택 해제
                   </button>
@@ -1764,7 +1958,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                         <button
                           type="button"
                           onClick={() => downloadOne(file)}
-                          className="rounded-md border border-gray-200 p-2 text-gray-500 transition hover:bg-gray-50 hover:text-gray-900"
+                          className={cn(secondaryButtonClassName, 'size-control-md p-2')}
                           aria-label={`${file.displayName} 다운로드`}
                         >
                           <Download className="h-4 w-4" />
@@ -1781,10 +1975,10 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                     onClick={() => void downloadSelected()}
                     disabled={selectedOutputs.length === 0}
                     className={cn(
-                      'inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-xs font-black transition',
+                      'inline-flex h-control-md items-center justify-center gap-2 rounded-control border px-4 text-xs font-extrabold transition-colors duration-150',
                       selectedOutputs.length === 0
-                        ? 'cursor-not-allowed bg-slate-100 text-slate-300'
-                        : 'bg-slate-950 text-white hover:bg-slate-800'
+                        ? 'cursor-not-allowed border-disabled-border bg-disabled text-disabled-text'
+                        : 'border-action bg-action text-on-action hover:border-action-hover hover:bg-action-hover'
                     )}
                   >
                     <Download className="h-4 w-4" />
@@ -1793,7 +1987,7 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
                   <button
                     type="button"
                     onClick={() => void downloadAll()}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white/80 px-4 py-2 text-xs font-black text-slate-700 transition hover:bg-slate-50"
+                    className={cn(secondaryButtonClassName, 'h-control-md gap-2 px-4 text-xs font-extrabold')}
                   >
                     <Download className="h-4 w-4" />
                     전체 한번에 다운로드
@@ -1808,18 +2002,11 @@ export function ImageToolkitTab({ initialMode = 'resize' }: ImageToolkitTabProps
               </div>
             )}
 
-            <div className="flex justify-end border-t border-gray-100 pt-4">
-              <button
-                type="button"
-                onClick={clearAll}
-                className="rounded-md border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-600 transition hover:bg-gray-50"
-              >
-                초기화
-              </button>
-            </div>
           </div>
         </aside>
-      </div>
+      </StudioGrid>
+        </>
+      )}
     </div>
   );
 }

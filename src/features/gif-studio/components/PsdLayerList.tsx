@@ -42,10 +42,10 @@ export function PsdLayerList({ source, selection, onSelectionChange }: PsdLayerL
                   label: layer.name,
                 });
               }}
-              className={`flex min-h-9 w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 disabled:cursor-not-allowed disabled:opacity-45 ${
+              className={`flex min-h-9 w-full items-center gap-2 rounded-control border px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-45 ${
                 active
-                  ? 'border-pink-200 bg-pink-50 text-pink-800'
-                  : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50 disabled:hover:border-transparent disabled:hover:bg-transparent'
+                  ? 'border-gif bg-gif-subtle text-gif'
+                  : 'border-transparent text-secondary hover:border-border hover:bg-subtle disabled:hover:border-transparent disabled:hover:bg-transparent'
               }`}
               style={{ paddingLeft: `${8 + Math.min(layer.depth, 12) * 12}px` }}
               title={layer.selectable ? `${layer.name} 선택` : `${layer.name}: 선택할 수 없는 그룹 또는 빈 레이어`}

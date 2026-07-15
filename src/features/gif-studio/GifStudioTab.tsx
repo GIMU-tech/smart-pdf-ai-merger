@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { Download, Eye, Film, ImagePlus, Loader2, Redo2, Save, ScanLine, Trash2, Undo2, Upload } from 'lucide-react';
+import { Download, Eye, Film, ImagePlus, Loader2, Redo2, Save, ScanLine, Undo2, Upload } from 'lucide-react';
+import { StudioGrid } from '../../ui/layout/StudioGrid';
+import { Button } from '../../ui/primitives/Button';
+import { WorkspaceToolbar } from '../../ui/shell/WorkspaceToolbar';
+import { FileWorkflowGate } from '../../ui/workflow/FileWorkflowGate';
+import { NewWorkButton } from '../../ui/workflow/NewWorkButton';
 import { GifCanvasStage } from './components/GifCanvasStage';
-import { GifFileDropzone } from './components/GifFileDropzone';
 import { GifPlaybackControls } from './components/GifPlaybackControls';
 import { GifPresetPanel } from './components/GifPresetPanel';
 import { GifPreviewCanvas } from './components/GifPreviewCanvas';
@@ -642,105 +646,117 @@ export function GifStudioTab() {
     }
   };
 
-  return (
-    <section className="flex min-h-0 w-full flex-1 flex-col gap-5" aria-labelledby="gif-studio-title">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 id="gif-studio-title" className="text-lg font-black tracking-tight text-slate-950">GIF 생성</h2>
-            <span className="rounded-md bg-pink-100 px-2 py-1 text-[10px] font-black tracking-wide text-pink-700">BETA</span>
-          </div>
-          <p className="mt-1 text-xs font-semibold text-slate-500">PNG·PDF·AI·EPS 영역, SVG·정적 HTML 객체 또는 PSD 레이어를 선택하고 결정적 프리셋을 실시간으로 미리 봅니다.</p>
+  if (!state.source) {
+    return (
+      <section className="min-h-0 w-full flex-1 overflow-y-auto" aria-label="GIF 생성 파일 업로드">
+        <div className="mx-auto w-full max-w-[920px] px-6 py-8 md:px-8">
+          <FileWorkflowGate
+          title="GIF 생성"
+          description="디자인 영역을 선택하고 움직임 프리셋을 적용해 GIF로 내보냅니다."
+          featureIcon={<Film className="size-5" />}
+          featureIconClassName="text-pink-500"
+          uploadTitle={state.status === 'importing' ? '디자인 파일을 불러오는 중입니다' : '편집할 디자인 파일을 드래그하거나 클릭하여 선택'}
+          uploadDescription="PNG · SVG · PSD · PDF · AI · EPS · HTML"
+          actionLabel="파일 선택"
+          accept=".png,.svg,.psd,.pdf,.ai,.eps,.html,.htm,image/png,image/svg+xml,text/html"
+          disabled={state.status === 'importing'}
+          onFiles={files => {
+            const [file] = files;
+            if (file) void handleFileSelected(file);
+          }}
+        >
+          {state.error && (
+            <p role="alert" className="rounded-control border border-danger/20 bg-danger-subtle px-4 py-3 text-sm font-bold text-danger">
+              {state.error}
+            </p>
+          )}
+          </FileWorkflowGate>
         </div>
-        {state.source && (
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <input
-              ref={projectInputRef}
-              type="file"
-              accept=".gifstudio.json,application/json"
-              className="sr-only"
-              tabIndex={-1}
-              aria-hidden="true"
-              onChange={event => {
-                const file = event.target.files?.[0];
-                event.target.value = '';
-                if (file) void handleLoadProject(file);
-              }}
-            />
-            <button
-              type="button"
-              onClick={performUndo}
-              disabled={!canUndo}
-              className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 shadow-sm hover:border-pink-200 hover:text-pink-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:text-slate-300"
-              aria-label="실행 취소 (Ctrl 또는 Command+Z)"
-              title="실행 취소 (Ctrl/Cmd+Z)"
-            >
-              <Undo2 className="h-4 w-4" aria-hidden="true" />
-              실행 취소
-            </button>
-            <button
-              type="button"
-              onClick={performRedo}
-              disabled={!canRedo}
-              className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 shadow-sm hover:border-pink-200 hover:text-pink-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:text-slate-300"
-              aria-label="다시 실행 (Ctrl 또는 Command+Shift+Z)"
-              title="다시 실행 (Ctrl/Cmd+Shift+Z)"
-            >
-              <Redo2 className="h-4 w-4" aria-hidden="true" />
-              다시 실행
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveProject}
-              className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 shadow-sm hover:border-pink-200 hover:text-pink-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2"
-            >
-              <Save className="h-4 w-4" aria-hidden="true" />
-              설정 저장
-            </button>
-            <button
-              type="button"
-              onClick={() => projectInputRef.current?.click()}
-              className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 shadow-sm hover:border-pink-200 hover:text-pink-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2"
-            >
-              <Upload className="h-4 w-4" aria-hidden="true" />
-              설정 불러오기
-            </button>
-            <button
-              type="button"
-              onClick={resetStudio}
-              className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 shadow-sm hover:border-rose-200 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2"
-            >
-              <Trash2 className="h-4 w-4" aria-hidden="true" />
-              작업 비우기
-            </button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden" aria-label="GIF 생성">
+        <WorkspaceToolbar className="justify-between rounded-panel border border-border px-3 shadow-panel" aria-label="GIF 프로젝트 도구">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="grid size-8 shrink-0 place-items-center text-pink-500">
+              <Film className="size-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-extrabold text-primary">GIF 생성</p>
+              <p className="truncate text-[11px] font-semibold text-muted">{state.source.name}</p>
+            </div>
           </div>
-        )}
-      </header>
+          <div className="flex shrink-0 items-center gap-2">
+          <input
+            ref={projectInputRef}
+            type="file"
+            accept=".gifstudio.json,application/json"
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={event => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void handleLoadProject(file);
+            }}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={performUndo}
+            disabled={!canUndo}
+            startIcon={<Undo2 className="h-4 w-4" />}
+            aria-label="실행 취소 (Ctrl 또는 Command+Z)"
+            title="실행 취소 (Ctrl/Cmd+Z)"
+          >
+            실행 취소
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={performRedo}
+            disabled={!canRedo}
+            startIcon={<Redo2 className="h-4 w-4" />}
+            aria-label="다시 실행 (Ctrl 또는 Command+Shift+Z)"
+            title="다시 실행 (Ctrl/Cmd+Shift+Z)"
+          >
+            다시 실행
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleSaveProject} startIcon={<Save className="h-4 w-4" />}>
+            설정 저장
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => projectInputRef.current?.click()} startIcon={<Upload className="h-4 w-4" />}>
+            설정 불러오기
+          </Button>
+          <NewWorkButton onConfirm={resetStudio} />
+          </div>
+        </WorkspaceToolbar>
 
       {projectMessage && (
         <p
           role="status"
-          className={`rounded-xl border px-4 py-2.5 text-xs font-bold ${projectMessage.kind === 'success' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-rose-100 bg-rose-50 text-rose-700'}`}
+          className={`mt-3 shrink-0 rounded-control border px-4 py-2.5 text-xs font-bold ${projectMessage.kind === 'success' ? 'border-success/20 bg-success-subtle text-success' : 'border-danger/20 bg-danger-subtle text-danger'}`}
         >
           {projectMessage.text}
         </p>
       )}
 
-      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[250px_minmax(0,1fr)_250px]">
-        <aside className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm" aria-labelledby="gif-source-heading">
-          <div className="mb-4 flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-950 text-pink-400">
+      <StudioGrid className={`${state.source || projectMessage ? 'mt-4' : ''} p-0`}>
+        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-panel border border-border bg-panel-translucent shadow-panel" aria-labelledby="gif-source-heading">
+          <div className="flex shrink-0 items-center gap-2 border-b border-border p-panel">
+            <span className="flex h-8 w-8 items-center justify-center rounded-control bg-action text-on-action">
               <ImagePlus className="h-4 w-4" aria-hidden="true" />
             </span>
-            <div>
-              <h3 id="gif-source-heading" className="text-sm font-black text-slate-900">원본 이미지</h3>
-              <p className="text-[11px] font-semibold text-slate-400">PNG · 안전하게 정제한 SVG/HTML · PSD · PDF · AI · EPS</p>
+            <div className="min-w-0">
+              <h3 id="gif-source-heading" className="text-sm font-extrabold text-primary">원본 이미지</h3>
+              <p className="truncate text-[11px] font-semibold text-muted">PNG · 안전하게 정제한 SVG/HTML · PSD · PDF · AI · EPS</p>
             </div>
           </div>
-          <GifFileDropzone onFileSelected={file => void handleFileSelected(file)} hasSource={Boolean(state.source)} />
-
-          {state.source && (
-            <dl className="mt-4 space-y-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-panel">
+            {state.source && (
+              <dl className="space-y-2 rounded-control border border-border bg-subtle px-3 py-3 text-xs">
               <div>
                 <dt className="font-bold text-slate-400">파일명</dt>
                 <dd className="mt-0.5 break-all font-black text-slate-700">{state.source.name}</dd>
@@ -779,53 +795,65 @@ export function GifStudioTab() {
                   </div>
                 </>
               )}
-            </dl>
-          )}
-          {state.source?.kind === 'html' && (
-            <p className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-2.5 py-2 text-[10px] font-bold leading-4 text-amber-800">
-              정적 디자인 BETA입니다. 원본 HTML 재저장, JavaScript 실행, 동적 상태, 외부 폰트·이미지는 지원하지 않습니다.
-            </p>
-          )}
-          {state.source?.kind === 'pdf' && (
-            <PdfPageNavigation
-              source={state.source}
-              busy={isPdfPageRendering}
-              onPageChange={pageNumber => void handlePdfPageChange(pageNumber)}
-            />
-          )}
-          {state.source?.kind === 'psd' && (
-            <>
-              {state.source.warnings.map(warning => (
-                <p key={warning} className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-2.5 py-2 text-[10px] font-bold leading-4 text-amber-800">
-                  {warning}
-                </p>
-              ))}
-              <PsdLayerList source={state.source} selection={state.selection} onSelectionChange={handleSelectionChange} />
-            </>
-          )}
+              </dl>
+            )}
+            {state.source?.kind === 'html' && (
+              <p className="mt-3 rounded-control border border-warning/20 bg-warning-subtle px-2.5 py-2 text-[10px] font-bold leading-4 text-amber-800">
+                정적 디자인 BETA입니다. 원본 HTML 재저장, JavaScript 실행, 동적 상태, 외부 폰트·이미지는 지원하지 않습니다.
+              </p>
+            )}
+            {state.source?.kind === 'pdf' && (
+              <PdfPageNavigation
+                source={state.source}
+                busy={isPdfPageRendering}
+                onPageChange={pageNumber => void handlePdfPageChange(pageNumber)}
+              />
+            )}
+            {state.source?.kind === 'psd' && (
+              <>
+                {state.source.warnings.map(warning => (
+                  <p key={warning} className="mt-3 rounded-control border border-warning/20 bg-warning-subtle px-2.5 py-2 text-[10px] font-bold leading-4 text-amber-800">
+                    {warning}
+                  </p>
+                ))}
+                <PsdLayerList source={state.source} selection={state.selection} onSelectionChange={handleSelectionChange} />
+              </>
+            )}
+            {state.error && <p role="alert" className="mt-3 rounded-control border border-danger/20 bg-danger-subtle px-3 py-2.5 text-xs font-bold text-danger">{state.error}</p>}
+          </div>
         </aside>
 
-        <div className="flex min-h-[460px] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm">
+        <div className="flex min-h-[520px] min-w-0 flex-col overflow-hidden rounded-panel border border-border bg-panel-translucent shadow-panel xl:min-h-0">
+          <div className="grid shrink-0 divide-y divide-border border-b border-border bg-panel xl:grid-cols-2 xl:divide-x xl:divide-y-0">
+            <div className="flex min-w-0 items-center justify-between gap-2 px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <Film className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
+                <h3 id="gif-editor-canvas-heading" className="truncate text-sm font-extrabold text-primary">Editor Canvas</h3>
+              </div>
+              <span className="inline-flex min-w-0 items-center gap-1.5 rounded-control bg-gif-subtle px-2.5 py-1 text-[11px] font-extrabold text-gif">
+                <ScanLine className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="truncate">{state.selection?.kind === 'object' ? `${state.selection.label} · ${state.selection.objectType}` : '영역 선택'}</span>
+              </span>
+            </div>
+            <div className="flex min-w-0 items-center justify-between gap-2 px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <Eye className="h-4 w-4 shrink-0 text-muted" aria-hidden="true" />
+                <h3 id="gif-preview-canvas-heading" className="truncate text-sm font-extrabold text-primary">Preview Canvas</h3>
+              </div>
+              <span className="shrink-0 text-[11px] font-extrabold text-muted">{Math.round(progress * 100)}%</span>
+            </div>
+          </div>
+
           {state.status === 'importing' && (
-            <div className="flex min-h-[360px] flex-1 flex-col items-center justify-center px-6 text-center" role="status">
-              <Loader2 className="h-7 w-7 animate-spin text-pink-500 motion-reduce:animate-none" aria-hidden="true" />
-              <p className="mt-3 text-sm font-black text-slate-700">PNG, SVG, PSD, PDF, AI, EPS 또는 HTML을 불러오는 중입니다</p>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center overflow-auto px-6 text-center" role="status">
+              <Loader2 className="h-7 w-7 animate-spin text-gif motion-reduce:animate-none" aria-hidden="true" />
+              <p className="mt-3 text-sm font-extrabold text-secondary">PNG, SVG, PSD, PDF, AI, EPS 또는 HTML을 불러오는 중입니다</p>
             </div>
           )}
 
           {state.status === 'ready' && state.source && imageUrl && (
-            <div className="grid min-h-0 flex-1 divide-y divide-slate-100 2xl:grid-cols-2 2xl:divide-x 2xl:divide-y-0">
+            <div className="grid min-h-0 min-w-0 flex-1 overflow-auto divide-y divide-border xl:grid-cols-2 xl:divide-x xl:divide-y-0">
               <section className="flex min-h-0 min-w-0 flex-col" aria-labelledby="gif-editor-canvas-heading">
-                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <Film className="h-4 w-4 text-pink-500" aria-hidden="true" />
-                    <h3 id="gif-editor-canvas-heading" className="text-sm font-black text-slate-900">Editor Canvas</h3>
-                  </div>
-                  <span className="inline-flex items-center gap-1.5 rounded-lg bg-pink-50 px-2.5 py-1 text-[11px] font-black text-pink-700">
-                    <ScanLine className="h-3.5 w-3.5" aria-hidden="true" />
-                    {state.selection?.kind === 'object' ? `${state.selection.label} · ${state.selection.objectType}` : '영역 선택'}
-                  </span>
-                </div>
                 <GifCanvasStage
                   imageUrl={imageUrl}
                   source={state.source}
@@ -837,13 +865,6 @@ export function GifStudioTab() {
               </section>
 
               <section className="flex min-h-0 min-w-0 flex-col" aria-labelledby="gif-preview-canvas-heading">
-                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <Eye className="h-4 w-4 text-pink-500" aria-hidden="true" />
-                    <h3 id="gif-preview-canvas-heading" className="text-sm font-black text-slate-900">Preview Canvas</h3>
-                  </div>
-                  <span className="text-[11px] font-black text-slate-400">{Math.round(progress * 100)}%</span>
-                </div>
                 <GifPreviewCanvas
                   imageUrl={imageUrl}
                   source={state.source}
@@ -859,79 +880,74 @@ export function GifStudioTab() {
           )}
 
           {state.status === 'idle' && (
-            <section className="flex min-h-[360px] flex-1 flex-col items-center justify-center px-6 text-center" aria-labelledby="gif-empty-title">
-              <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-pink-100 bg-pink-50 text-pink-500">
+            <section className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center overflow-auto px-6 text-center" aria-labelledby="gif-empty-title">
+              <span className="flex h-14 w-14 items-center justify-center rounded-panel border border-border bg-subtle text-muted">
                 <ImagePlus className="h-7 w-7" aria-hidden="true" />
               </span>
-              <h3 id="gif-empty-title" className="mt-5 text-lg font-black tracking-tight text-slate-900">편집할 PNG, SVG, PSD, PDF, AI, EPS 또는 HTML을 선택해 주세요</h3>
-              <p className="mt-2 max-w-sm text-sm font-medium leading-6 text-slate-500">왼쪽의 파일 선택 버튼을 사용하면 이미지가 캔버스에 표시됩니다.</p>
+              <h3 id="gif-empty-title" className="mt-5 text-lg font-extrabold tracking-tight text-primary">편집할 PNG, SVG, PSD, PDF, AI, EPS 또는 HTML을 선택해 주세요</h3>
+              <p className="mt-2 max-w-sm text-sm font-medium leading-6 text-muted">왼쪽의 파일 선택 버튼을 사용하면 이미지가 캔버스에 표시됩니다.</p>
             </section>
           )}
+
+          <GifPlaybackControls
+            currentTimeMs={currentTimeMs}
+            durationMs={durationMs}
+            intensity={intensity}
+            accentColor={accentColor}
+            direction={direction}
+            loopCount={loopCount}
+            isPlaying={isPlaying}
+            disabled={!canPreview}
+            prefersReducedMotion={prefersReducedMotion}
+            onTogglePlayback={() => setIsPlaying(playing => !playing)}
+            onRestart={resetPlayback}
+            onScrub={timeMs => {
+              setIsPlaying(false);
+              seekTo(timeMs);
+            }}
+            onDurationChange={handleDurationChange}
+            onIntensityChange={nextIntensity => updateEditSnapshot({ intensity: Math.max(0, Math.min(1, nextIntensity)) })}
+            onAccentColorChange={nextAccentColor => updateEditSnapshot({ accentColor: nextAccentColor })}
+            onDirectionChange={nextDirection => updateEditSnapshot({ direction: nextDirection })}
+            onLoopCountChange={nextLoopCount => updateEditSnapshot({ loopCount: Math.max(0, Math.min(3, nextLoopCount)) })}
+            onEditGestureStart={beginEditGesture}
+            onEditGestureEnd={finishEditGesture}
+          />
         </div>
 
-        <GifPresetPanel value={presetId} disabled={!hasSelection} targetContext={targetContext} onChange={handlePresetChange} />
-      </div>
+        <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-panel border border-border bg-panel-translucent shadow-panel" aria-label="GIF 프리셋 및 내보내기">
+          <GifPresetPanel value={presetId} disabled={!hasSelection} targetContext={targetContext} onChange={handlePresetChange} />
 
-      <GifPlaybackControls
-        currentTimeMs={currentTimeMs}
-        durationMs={durationMs}
-        intensity={intensity}
-        accentColor={accentColor}
-        direction={direction}
-        loopCount={loopCount}
-        isPlaying={isPlaying}
-        disabled={!canPreview}
-        prefersReducedMotion={prefersReducedMotion}
-        onTogglePlayback={() => setIsPlaying(playing => !playing)}
-        onRestart={resetPlayback}
-        onScrub={timeMs => {
-          setIsPlaying(false);
-          seekTo(timeMs);
-        }}
-        onDurationChange={handleDurationChange}
-        onIntensityChange={nextIntensity => updateEditSnapshot({ intensity: Math.max(0, Math.min(1, nextIntensity)) })}
-        onAccentColorChange={nextAccentColor => updateEditSnapshot({ accentColor: nextAccentColor })}
-        onDirectionChange={nextDirection => updateEditSnapshot({ direction: nextDirection })}
-        onLoopCountChange={nextLoopCount => updateEditSnapshot({ loopCount: Math.max(0, Math.min(3, nextLoopCount)) })}
-        onEditGestureStart={beginEditGesture}
-        onEditGestureEnd={finishEditGesture}
-      />
-
-      <section className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-sm" aria-labelledby="gif-export-heading">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 id="gif-export-heading" className="text-sm font-black text-slate-900">웹 GIF 내보내기</h3>
-            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+          <section className="sticky bottom-0 z-10 shrink-0 border-t border-border bg-panel p-panel" aria-labelledby="gif-export-heading">
+            <h3 id="gif-export-heading" className="text-sm font-extrabold text-primary">웹 GIF 내보내기</h3>
+            <p className="mt-0.5 text-[11px] font-semibold text-muted">
               12 FPS · 최대 60프레임 · 860px 이하 · {loopCount === 0 ? '무한 반복' : `${loopCount}회 반복`}
             </p>
-          </div>
-          <button
-            type="button"
+            <Button
+            className="mt-3 w-full"
             onClick={() => void handleExportGif()}
-            disabled={!canPreview || isExporting}
-            className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-xs font-black text-white shadow-sm transition hover:bg-pink-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+            disabled={!canPreview}
+            loading={isExporting}
+            loadingLabel="GIF 만드는 중"
+            startIcon={<Download className="h-4 w-4" />}
           >
-            {isExporting
-              ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              : <Download className="h-4 w-4" aria-hidden="true" />}
-            {isExporting ? 'GIF 만드는 중' : 'GIF 다운로드'}
-          </button>
-        </div>
+              GIF 다운로드
+            </Button>
 
-        {exportStatus.kind !== 'idle' && exportStatus.kind !== 'error' && (
-          <div className="mt-3" role="status" aria-live="polite">
-            <div className="h-1.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={exportStatus.progress}>
-              <div className="h-full rounded-full bg-pink-500 transition-[width]" style={{ width: `${exportStatus.progress}%` }} />
-            </div>
-            <p className={`mt-2 text-xs font-bold ${exportStatus.kind === 'success' ? 'text-emerald-700' : 'text-slate-600'}`}>{exportStatus.message}</p>
-          </div>
-        )}
-      </section>
-
-      <div className="min-h-5" aria-live="assertive" aria-atomic="true">
-        {state.error && <p className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-2.5 text-xs font-bold text-rose-700">{state.error}</p>}
-        {exportStatus.kind === 'error' && <p className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-2.5 text-xs font-bold text-rose-700">{exportStatus.message}</p>}
-      </div>
+            {exportStatus.kind !== 'idle' && exportStatus.kind !== 'error' && (
+              <div className="mt-3" role="status" aria-live="polite">
+                <div className="h-1.5 overflow-hidden rounded-full bg-subtle" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={exportStatus.progress}>
+                  <div className="h-full rounded-full bg-gif transition-[width]" style={{ width: `${exportStatus.progress}%` }} />
+                </div>
+                <p className={`mt-2 text-xs font-bold ${exportStatus.kind === 'success' ? 'text-success' : 'text-secondary'}`}>{exportStatus.message}</p>
+              </div>
+            )}
+            {exportStatus.kind === 'error' && (
+              <p role="alert" className="mt-3 rounded-control border border-danger/20 bg-danger-subtle px-3 py-2.5 text-xs font-bold text-danger">{exportStatus.message}</p>
+            )}
+          </section>
+        </aside>
+      </StudioGrid>
     </section>
   );
 }
