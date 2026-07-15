@@ -968,6 +968,8 @@ export default function App() {
             ? "max-w-none p-0 bg-[#fbfcfd] h-screen"
           : activeTab === 'images'
             ? "max-w-none p-0 bg-[#fbfcfd] h-[calc(100vh-56px)]"
+            : activeTab === 'gif'
+              ? "max-w-none p-5 bg-[#fbfcfd] h-[calc(100vh-56px)]"
             : "max-w-2xl mx-auto px-6 py-10 gap-5"
       )}>
 
@@ -1046,11 +1048,13 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="mx-auto mt-14 flex w-fit max-w-full flex-wrap justify-center gap-y-5 rounded-[28px] border border-slate-200/80 bg-white/85 px-7 py-6 shadow-[0_24px_90px_rgba(15,23,42,0.10)] ring-1 ring-white/80 backdrop-blur md:px-8">
-                  {workspaceGroups.map(group => (
-                    <div key={group.label} className="relative w-fit min-w-0 px-5 py-2 after:hidden after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-300/85 lg:py-1 lg:after:block first:lg:pl-0 last:lg:pr-0 last:after:hidden">
+                <div className="mx-auto mt-14 w-full max-w-full rounded-[28px] border border-slate-200/80 bg-white/85 shadow-[0_24px_90px_rgba(15,23,42,0.10)] ring-1 ring-white/80 backdrop-blur lg:w-fit">
+                  <div className="overflow-x-auto lg:overflow-visible">
+                    <div className="flex min-w-full w-max flex-nowrap justify-center px-7 py-6 md:px-8">
+                      {workspaceGroups.map(group => (
+                        <div key={group.label} className="relative flex-shrink-0 w-fit min-w-0 px-5 py-2 after:hidden after:absolute after:bottom-2 after:right-0 after:top-2 after:w-px after:bg-slate-300/85 lg:py-1 lg:after:block first:lg:pl-0 last:lg:pr-0 last:after:hidden">
                       <p className="mb-4 text-center text-xs font-black text-slate-500">{group.label}</p>
-                      <div className="flex flex-wrap justify-center gap-3">
+                      <div className="flex flex-nowrap justify-center gap-3">
                         {uniqueWorkspaceItems(group.items).map(item => {
                           const Icon = item.icon;
                           const itemKey = workspaceItemKey(item);
@@ -1083,8 +1087,10 @@ export default function App() {
                           );
                         })}
                       </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
                 </div>
               </motion.div>
             </div>
